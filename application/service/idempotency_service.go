@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -28,8 +30,13 @@ type IdempotencyService struct {
 	clock         port.Clock
 
 	policy       domainservice.IdempotencyPolicy
+	captureRules domainservice.CaptureRules
 	waitTimeout  time.Duration
 	waitInterval time.Duration
+
+	logger  port.Logger
+	metrics port.Metrics
+	tracer  port.Tracer
 }
 
 func NewIdempotencyService(config Config) (*IdempotencyService, error) {
@@ -47,8 +54,12 @@ func NewIdempotencyService(config Config) (*IdempotencyService, error) {
 		ownerFactory:  config.OwnerFactory,
 		clock:         config.Clock,
 		policy:        config.Policy,
+		captureRules:  config.CaptureRules,
 		waitTimeout:   config.WaitTimeout,
 		waitInterval:  config.WaitInterval,
+		logger:        config.Logger,
+		metrics:       config.Metrics,
+		tracer:        config.Tracer,
 	}, nil
 }
 
@@ -143,18 +154,45 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 		now = s.clock.Now()
 	}
 
+	// Find the record first — if it doesn't exist, fail early.
 	record, err := s.repo.Find(ctx, cmd.Key)
 	if err != nil {
+		s.logger.Error(ctx, "idempotency complete find failed",
+			port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
+			port.Field{Key: "error", Value: err.Error()},
+		)
 		return err
 	}
 	if record == nil {
 		return model.ErrInvalidState
 	}
 
-	if err := record.Complete(cmd.Owner, cmd.Fingerprint, toDomainResponse(cmd.Response), now, s.policy.TTL.CompletedTTL); err != nil {
+	resp := cmd.Response
+
+	// Consult capture policy. If the response should not be cached, auto-abort
+	// instead of completing. This keeps the domain model clean — the domain
+	// aggregate does not need to know about HTTP status-code conventions.
+	if !s.captureRules.ShouldCache(resp.StatusCode, contentType(resp.Headers), int64(len(resp.Body))) {
+		return s.repo.Abort(ctx, cmd.Key, cmd.Owner, model.FailureModeDelete)
+	}
+
+	// Strip excluded headers before storing.
+	resp.Headers = s.captureRules.FilterHeaders(resp.Headers)
+
+	if err := record.Complete(cmd.Owner, cmd.Fingerprint, toDomainResponse(resp), now, s.policy.TTL.CompletedTTL); err != nil {
 		return err
 	}
-	return s.repo.Commit(ctx, record)
+	if err := s.repo.Commit(ctx, record); err != nil {
+		s.logger.Error(ctx, "idempotency commit failed",
+			port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
+			port.Field{Key: "error", Value: err.Error()},
+		)
+		s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "error"})
+		return err
+	}
+
+	s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "success"})
+	return nil
 }
 
 func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand) error {
@@ -296,4 +334,44 @@ func fromDomainResponse(response model.CapturedResponse) dto.CapturedResponse {
 		Body:       response.Body,
 		Codec:      response.Codec,
 	}
+}
+
+// hashKey returns a truncated hex SHA-256 prefix of the raw key.
+// The full idempotency key must never appear in logs.
+func hashKey(raw string) string {
+	if raw == "" {
+		return "<empty>"
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// contentType extracts the Content-Type value from headers in a
+// case-insensitive manner.
+func contentType(headers map[string][]string) string {
+	for name, values := range headers {
+		if len(values) > 0 && equalFold(name, "Content-Type") {
+			return values[0]
+		}
+	}
+	return ""
+}
+
+func equalFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if ca >= 'A' && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if cb >= 'A' && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }

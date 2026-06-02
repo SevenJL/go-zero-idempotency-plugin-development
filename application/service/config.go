@@ -25,6 +25,19 @@ type Config struct {
 
 	WaitTimeout  time.Duration
 	WaitInterval time.Duration
+
+	// CaptureRules controls which responses are cached for replay.
+	// Zero value means safe defaults (cache 2xx, 1 MB limit, JSON only).
+	CaptureRules domainservice.CaptureRules
+
+	// Logger receives structured log events. Defaults to no-op.
+	Logger port.Logger
+
+	// Metrics receives counter and histogram observations. Defaults to no-op.
+	Metrics port.Metrics
+
+	// Tracer creates spans for distributed tracing. Defaults to no-op.
+	Tracer port.Tracer
 }
 
 func (c Config) normalized() Config {
@@ -41,11 +54,21 @@ func (c Config) normalized() Config {
 		c.Clock = SystemClock{}
 	}
 	c.Policy = domainservice.NewIdempotencyPolicy(c.Policy.DuplicatePolicy, c.Policy.TTL)
+	c.CaptureRules = domainservice.NewCaptureRules(c.CaptureRules)
 	if c.WaitTimeout <= 0 {
 		c.WaitTimeout = 5 * time.Second
 	}
 	if c.WaitInterval <= 0 {
 		c.WaitInterval = 50 * time.Millisecond
+	}
+	if c.Logger == nil {
+		c.Logger = port.NoopLogger()
+	}
+	if c.Metrics == nil {
+		c.Metrics = port.NoopMetrics()
+	}
+	if c.Tracer == nil {
+		c.Tracer = port.NoopTracer()
 	}
 	return c
 }

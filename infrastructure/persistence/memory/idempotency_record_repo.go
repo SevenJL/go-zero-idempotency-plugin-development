@@ -124,6 +124,45 @@ func (r *IdempotencyRecordRepository) Abort(_ context.Context, key valueobject.I
 	return nil
 }
 
+func (r *IdempotencyRecordRepository) Renew(_ context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, ttl time.Duration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing := r.records[key.String()]
+	if existing == nil {
+		return nil // best-effort: key may have already been cleaned up
+	}
+	if existing.IsExpired(r.now()) {
+		delete(r.records, key.String())
+		return nil
+	}
+	if !existing.Owner().Equals(owner) {
+		return model.ErrOwnerMismatch
+	}
+	if existing.Status() != model.StatusProcessing {
+		return nil // best-effort: only extend processing records
+	}
+
+	// Create a new record with updated expiry via RestoreRecord to keep
+	// the existing state intact and only bump ExpiresAt.
+	updated := model.RestoreRecord(model.RestoreRecordParams{
+		Key:          existing.Key(),
+		Fingerprint:  existing.Fingerprint(),
+		Owner:        existing.Owner(),
+		Operation:    existing.Operation(),
+		Scope:        existing.Scope(),
+		Status:       existing.Status(),
+		Response:     existing.Response(),
+		ErrorCode:    existing.ErrorCode(),
+		ErrorMessage: existing.ErrorMessage(),
+		CreatedAt:    existing.CreatedAt(),
+		UpdatedAt:    r.now(),
+		ExpiresAt:    r.now().Add(ttl),
+	})
+	r.records[key.String()] = updated
+	return nil
+}
+
 func (r *IdempotencyRecordRepository) Find(_ context.Context, key valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
