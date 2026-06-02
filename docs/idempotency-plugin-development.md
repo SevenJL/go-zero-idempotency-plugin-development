@@ -741,12 +741,13 @@ go-zero HTTP 适配器也可复用该实现，只是类型包装为 `rest.Middle
 | Infrastructure | Redis key prefix、script timeout、codec | `infrastructure/persistence/redis` |
 
 应用启动时由 composition root 负责把总配置拆成各层配置。领域层不读取 YAML，也不感知 go-zero 的 `Config` 结构。
+外部 YAML 可以继续使用 `Enabled` 便于业务配置表达；组装应用层 `Config` 时建议转换为零值启用的 `Disabled`，避免 Go bool 默认值把插件静默关闭。
 
 ### 16.1 Go Config
 
 ```go
 type Config struct {
-    Enabled bool
+    Disabled bool
     Scope string
 
     Key KeyConfig
@@ -970,7 +971,6 @@ repo := redisrepo.NewIdempotencyRecordRepository(rds, redisrepo.Options{
 })
 
 idemSvc := appservice.NewIdempotencyService(appservice.Config{
-    Enabled: true,
     Scope: "order-api",
     Repository: repo,
     Key: idempotency.KeyConfig{
