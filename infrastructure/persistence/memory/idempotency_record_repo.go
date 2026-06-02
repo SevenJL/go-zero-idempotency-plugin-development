@@ -38,6 +38,10 @@ func NewIdempotencyRecordRepository(opts ...Option) *IdempotencyRecordRepository
 	return repo
 }
 
+// TryBegin implements the "try begin" logic for idempotency records, mirroring the Redis Lua script:
+// - If no record exists or the existing record is expired, create a new processing record and return Acquired.
+// - If a non-expired record exists and conflicts with the new request, return Conflict.
+// - If a non-expired record exists and does not conflict, return its status (Replay, Failed, or InProgress).
 func (r *IdempotencyRecordRepository) TryBegin(_ context.Context, record *model.IdempotencyRecord) (model.BeginDecision, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

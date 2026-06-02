@@ -16,10 +16,10 @@ type Config struct {
 
 	Repository repository.IdempotencyRecordRepository
 
-	KeyResolver  port.KeyResolver
+	KeyResolver   port.KeyResolver
 	Fingerprinter port.Fingerprinter
-	OwnerFactory port.OwnerFactory
-	Clock        port.Clock
+	OwnerFactory  port.OwnerFactory
+	Clock         port.Clock
 
 	Policy domainservice.IdempotencyPolicy
 

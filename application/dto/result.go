@@ -17,21 +17,21 @@ const (
 )
 
 type BeginResult struct {
-	Type        BeginResultType
-	Key         valueobject.IdempotencyKey
-	Fingerprint valueobject.Fingerprint
-	Owner       valueobject.Owner
-	Record      *model.IdempotencyRecord
-	Response    CapturedResponse
-	ErrorCode   string
+	Type         BeginResultType
+	Key          valueobject.IdempotencyKey
+	Fingerprint  valueobject.Fingerprint
+	Owner        valueobject.Owner
+	Record       *model.IdempotencyRecord
+	Response     CapturedResponse
+	ErrorCode    string
 	ErrorMessage string
 }
 
 type ReplayResult struct {
-	Found       bool
-	Key         valueobject.IdempotencyKey
-	Record      *model.IdempotencyRecord
-	Response    CapturedResponse
-	ErrorCode   string
+	Found        bool
+	Key          valueobject.IdempotencyKey
+	Record       *model.IdempotencyRecord
+	Response     CapturedResponse
+	ErrorCode    string
 	ErrorMessage string
 }

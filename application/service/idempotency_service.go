@@ -27,8 +27,8 @@ type IdempotencyService struct {
 	ownerFactory  port.OwnerFactory
 	clock         port.Clock
 
-	policy      domainservice.IdempotencyPolicy
-	waitTimeout time.Duration
+	policy       domainservice.IdempotencyPolicy
+	waitTimeout  time.Duration
 	waitInterval time.Duration
 }
 
