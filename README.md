@@ -132,13 +132,60 @@ client → interfaces (HTTP/RPC 适配器)
 
 ## 运行测试
 
+### 单元与集成测试
+
 ```bash
 go test ./... -count=1
 ```
 
+### 性能基准测试
+
+启动示例服务并压测，验证插件真实开销：
+
+```bash
+# 终端 1：启动 Gin 示例服务
+cd examples/gin
+go run .
+
+# 终端 2：安装压测工具并运行 4 组基准测试
+go install github.com/tsliwowicz/go-wrk@latest
+
+# Baseline：无 Key 放行（裸 handler）
+~/go/bin/go-wrk -c 50 -d 10 -M POST \
+  -H "Content-Type: application/json" \
+  -body '{"sku":"test","qty":1}' \
+  http://localhost:8080/api/orders
+
+# Acquire：携带 Idempotency-Key（创建记录 + 执行 handler + Complete）
+curl -s -X POST http://localhost:8080/api/orders \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: bench-key-0000000001" \
+  -d '{"sku":"test","qty":1}' > /dev/null
+
+~/go/bin/go-wrk -c 50 -d 10 -M POST \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: bench-key-0000000001" \
+  -body '{"sku":"test","qty":1}' \
+  http://localhost:8080/api/orders
+
+# Replay：同 Key 再次请求（命中缓存，不执行 handler）
+~/go/bin/go-wrk -c 50 -d 10 -M POST \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: bench-key-0000000001" \
+  -body '{"sku":"test","qty":1}' \
+  http://localhost:8080/api/orders
+
+# Conflict：同 Key 不同 Body（指纹冲突，返回 409）
+~/go/bin/go-wrk -c 50 -d 10 -M POST \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: bench-key-0000000001" \
+  -body '{"sku":"conflict","qty":99}' \
+  http://localhost:8080/api/orders
+```
+
 ## 性能报告
 
-测试环境：MacBook Air M3 / Go 1.25.1 / Gin release mode / Memory 仓储  
+测试环境：MacBook Air M4 / Go 1.25.1 / Gin release mode / Memory 仓储  
 测试工具：[go-wrk](https://github.com/tsliwowicz/go-wrk) — 50 并发连接, 10 秒预热, 10 秒压测  
 被测端点：`POST /api/orders`（Gin + idempotency middleware）
 
