@@ -79,5 +79,5 @@ func main() {
 
 type systemClock struct{}
 
-func (systemClock) Now() time.Time       { return time.Now().UTC() }
+func (systemClock) Now() time.Time        { return time.Now().UTC() }
 func (systemClock) Sleep(d time.Duration) { time.Sleep(d) }
