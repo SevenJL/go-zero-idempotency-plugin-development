@@ -3,7 +3,7 @@ package codec
 import (
 	"sync"
 
-	"github.com/your-org/go-idempotency/application/port"
+	"github.com/senvejl117/go-idempotency/application/port"
 )
 
 type registryEntry struct {

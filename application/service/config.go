@@ -3,9 +3,9 @@ package service
 import (
 	"time"
 
-	"github.com/your-org/go-idempotency/application/port"
-	"github.com/your-org/go-idempotency/domain/repository"
-	domainservice "github.com/your-org/go-idempotency/domain/service"
+	"github.com/senvejl117/go-idempotency/application/port"
+	"github.com/senvejl117/go-idempotency/domain/repository"
+	domainservice "github.com/senvejl117/go-idempotency/domain/service"
 )
 
 type Config struct {

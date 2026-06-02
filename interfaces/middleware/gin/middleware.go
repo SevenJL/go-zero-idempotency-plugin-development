@@ -9,10 +9,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/your-org/go-idempotency/application/command"
-	"github.com/your-org/go-idempotency/application/dto"
-	appservice "github.com/your-org/go-idempotency/application/service"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/application/command"
+	"github.com/senvejl117/go-idempotency/application/dto"
+	appservice "github.com/senvejl117/go-idempotency/application/service"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 // Middleware returns a gin.HandlerFunc that provides idempotency protection.

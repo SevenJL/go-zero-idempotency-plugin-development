@@ -3,8 +3,8 @@ package command
 import (
 	"time"
 
-	"github.com/your-org/go-idempotency/application/dto"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/application/dto"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 type CompleteCommand struct {

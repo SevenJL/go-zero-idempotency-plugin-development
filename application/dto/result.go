@@ -1,8 +1,8 @@
 package dto
 
 import (
-	"github.com/your-org/go-idempotency/domain/model"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/domain/model"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 type BeginResultType string

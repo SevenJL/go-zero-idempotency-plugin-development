@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/your-org/go-idempotency/domain/repository"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/domain/repository"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 // Heartbeat periodically extends the TTL of a processing idempotency record

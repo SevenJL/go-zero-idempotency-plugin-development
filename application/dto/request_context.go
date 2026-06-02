@@ -1,6 +1,6 @@
 package dto
 
-import "github.com/your-org/go-idempotency/domain/valueobject"
+import "github.com/senvejl117/go-idempotency/domain/valueobject"
 
 type RequestContext struct {
 	Operation valueobject.Operation

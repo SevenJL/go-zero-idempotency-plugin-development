@@ -1,4 +1,4 @@
-module github.com/your-org/go-idempotency
+module github.com/senvejl117/go-idempotency
 
 go 1.25.0
 

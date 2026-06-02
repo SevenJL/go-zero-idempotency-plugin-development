@@ -7,13 +7,13 @@ import (
 	"errors"
 	"time"
 
-	"github.com/your-org/go-idempotency/application/command"
-	"github.com/your-org/go-idempotency/application/dto"
-	"github.com/your-org/go-idempotency/application/port"
-	"github.com/your-org/go-idempotency/domain/model"
-	"github.com/your-org/go-idempotency/domain/repository"
-	domainservice "github.com/your-org/go-idempotency/domain/service"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/application/command"
+	"github.com/senvejl117/go-idempotency/application/dto"
+	"github.com/senvejl117/go-idempotency/application/port"
+	"github.com/senvejl117/go-idempotency/domain/model"
+	"github.com/senvejl117/go-idempotency/domain/repository"
+	domainservice "github.com/senvejl117/go-idempotency/domain/service"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 var ErrRepositoryRequired = errors.New("idempotency repository is required")

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/your-org/go-idempotency/application/dto"
-	"github.com/your-org/go-idempotency/domain/valueobject"
+	"github.com/senvejl117/go-idempotency/application/dto"
+	"github.com/senvejl117/go-idempotency/domain/valueobject"
 )
 
 var ErrMissingIdempotencyKey = errors.New("idempotency key is missing")
