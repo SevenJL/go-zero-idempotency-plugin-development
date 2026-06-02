@@ -1,142 +1,204 @@
 # go-zero 分布式通用幂等性插件
 
-当前仓库处于开发前设计阶段，已先完成按 DDD 领域分层设计的插件开发文档。
+基于 DDD 领域驱动设计的分布式通用幂等性插件，以 go-zero 为主接入框架，同时支持 Gin、标准 net/http、原生 gRPC。核心引擎与框架无关，适配层尽量薄。
 
-当前代码进度：
+## 代码进度
 
-- 已初始化 Go module。
-- 已完成领域层初版：聚合根、值对象、领域策略、仓储端口。
-- 已完成应用层初版：`IdempotencyService`、command、DTO、默认 key resolver/fingerprinter。
-- 已完成 Memory 仓储初版和基础单元测试。
-- 已完成一次 code review 修正：默认零值启用、TTL 校验、wait 失败状态处理、Memory 仓储提交校验。
-- 已完成集成测试，覆盖全部核心功能路径，未发现 bug。
+- ✅ M1 领域层：聚合根、值对象、领域策略、仓储端口
+- ✅ M2 应用层：`IdempotencyService`、command、DTO、默认端口实现、Memory 仓储
+- ✅ M3 Redis 仓储：Lua 原子脚本（Begin/Commit/Abort/Renew）、JSON record mapper
+- ✅ M4 HTTP 适配器：net/http、go-zero、Gin 中间件，响应捕获与 replay
+- ✅ M5 gRPC 适配器：UnaryServerInterceptor、RPCCodec 端口与注册表
+- ✅ M6 可观测性：Logger/Metrics/Tracer 端口 + no-op 默认实现
+- ✅ 响应缓存策略：CaptureRules 领域服务（状态码/Content-Type/body size 规则）
+- ✅ ProcessingTTL 自动续期：Heartbeat 组件，防止长耗时接口死锁
 
-当前目录：
+## 目录结构
 
-- `domain/`：幂等领域模型、值对象、领域策略、仓储端口。
-- `application/`：幂等应用服务、command、DTO、端口和默认实现。
-- `infrastructure/persistence/memory/`：用于单测和本地调试的内存仓储。
-- `tests/`：集成测试，端到端验证插件正确性。
-- `docs/`：DDD 设计和开发文档。
+```
+├── domain/                          # 领域层（不依赖任何框架）
+│   ├── model/                       # IdempotencyRecord 聚合根、状态机、决策
+│   ├── valueobject/                 # IdempotencyKey、Fingerprint、Owner 等值对象
+│   ├── service/                     # IdempotencyPolicy、CaptureRules 领域服务
+│   └── repository/                  # IdempotencyRecordRepository 仓储端口
+├── application/                     # 应用层（编排用例，不依赖基础设施）
+│   ├── command/                     # Begin/Complete/Abort/Replay 命令
+│   ├── dto/                         # RequestContext、CapturedResponse、BeginResult
+│   ├── port/                        # KeyResolver、Fingerprinter、Clock、Logger 等端口
+│   └── service/                     # IdempotencyService、Heartbeat、Config、默认端口实现
+├── infrastructure/                  # 基础设施层（实现领域和应用端口）
+│   ├── persistence/
+│   │   ├── memory/                  # 内存仓储（单测与本地调试）
+│   │   └── redis/                   # Redis 仓储（Lua 原子脚本，支持分布式部署）
+│   └── codec/                       # JSON codec + RPCCodecRegistry
+├── interfaces/                      # 接口层（框架适配器）
+│   └── middleware/
+│       ├── httpx/                   # net/http 标准中间件 + 响应捕获
+│       ├── gozero/                  # go-zero rest.Middleware
+│       ├── gin/                     # Gin middleware
+│       └── grpc/                    # gRPC UnaryServerInterceptor
+├── tests/                           # 集成测试（25 个场景，全部通过）
+└── docs/                            # DDD 设计和开发文档
+```
 
-运行测试：
+## 快速开始
+
+### 安装
+
+```bash
+go get github.com/your-org/go-idempotency
+```
+
+### go-zero HTTP
+
+```go
+import (
+    "github.com/zeromicro/go-zero/core/stores/redis"
+    "github.com/zeromicro/go-zero/rest"
+
+    appservice "github.com/your-org/go-idempotency/application/service"
+    "github.com/your-org/go-idempotency/infrastructure/persistence/redis"
+    gozerohttp "github.com/your-org/go-idempotency/interfaces/middleware/gozero"
+)
+
+// Composition root
+rds := redis.MustNewRedis(redis.RedisConf{...})
+repo := redisrepo.NewIdempotencyRecordRepository(rds, redisrepo.WithKeyPrefix("idem"))
+idemSvc, _ := appservice.NewIdempotencyService(appservice.Config{
+    Repository: repo,
+    Scope:      "order-api",
+})
+
+server := rest.MustNewServer(rest.RestConf{...})
+server.Use(gozerohttp.Middleware(idemSvc))
+```
+
+### Gin
+
+```go
+import (
+    "github.com/gin-gonic/gin"
+    ginidem "github.com/your-org/go-idempotency/interfaces/middleware/gin"
+)
+
+r := gin.New()
+r.Use(ginidem.Middleware(idemSvc))
+r.POST("/api/orders", createOrder)
+```
+
+### net/http
+
+```go
+import (
+    "github.com/your-org/go-idempotency/interfaces/middleware/httpx"
+)
+
+mux := http.NewServeMux()
+mux.Handle("/api/orders", httpx.Middleware(idemSvc)(http.HandlerFunc(createOrder)))
+```
+
+### gRPC / go-zero zrpc
+
+```go
+import (
+    "google.golang.org/grpc"
+    grpcidem "github.com/your-org/go-idempotency/interfaces/middleware/grpc"
+    "github.com/your-org/go-idempotency/infrastructure/codec"
+)
+
+registry := codec.NewCodecRegistry(nil)
+registry.Register("/order.OrderService/Create", codec.JSONCodec{}, func() any {
+    return &orderpb.CreateOrderResp{}
+})
+
+s := grpc.NewServer(
+    grpc.UnaryInterceptor(grpcidem.UnaryServerInterceptor(idemSvc, registry)),
+)
+```
+
+## 核心架构
+
+```
+client → interfaces (HTTP/RPC 适配器)
+              ↓
+         application (IdempotencyService 编排)
+              ↓
+         domain (聚合根、值对象、领域策略)
+              ↓
+         infrastructure (Redis/Memory 仓储)
+```
+
+依赖方向：`interfaces → application → domain`，`infrastructure → domain/application ports`
+
+## 运行测试
 
 ```bash
 go test ./... -count=1
 ```
 
-文档入口：
+## 配置说明
+
+### IdempotencyService Config
+
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `Disabled` | `bool` | `false` | 显式禁用插件 |
+| `Scope` | `string` | `""` | 服务标识，参与指纹计算 |
+| `Repository` | `IdempotencyRecordRepository` | **必填** | 仓储实现 |
+| `Policy.DuplicatePolicy` | `string` | `"reject"` | 重复请求策略：`reject` / `wait` / `pass_through` |
+| `Policy.TTL.ProcessingTTL` | `duration` | `30s` | 处理中记录 TTL |
+| `Policy.TTL.CompletedTTL` | `duration` | `24h` | 完成记录缓存 TTL |
+| `Policy.TTL.FailedTTL` | `duration` | `5m` | 失败记录缓存 TTL |
+| `WaitTimeout` | `duration` | `5s` | Wait 策略最大等待时间 |
+| `WaitInterval` | `duration` | `50ms` | Wait 策略轮询间隔 |
+| `CaptureRules.CacheStatus2xx` | `bool` | `true` | 缓存成功响应 |
+| `CaptureRules.CacheStatus5xx` | `bool` | `false` | 缓存服务端错误响应 |
+| `CaptureRules.MaxBodyBytes` | `int64` | `1MB` | 最大缓存 body 大小 |
+| `CaptureRules.ContentTypes` | `[]string` | `["application/json"]` | 允许缓存的 Content-Type |
+| `CaptureRules.ExcludedHeaders` | `[]string` | `Set-Cookie,Authorization,Cookie` | 不缓存的响应头 |
+| `Logger` | `port.Logger` | no-op | 结构化日志 |
+| `Metrics` | `port.Metrics` | no-op | 指标上报 |
+| `Tracer` | `port.Tracer` | no-op | 分布式追踪 |
+| `KeyResolver` | `port.KeyResolver` | `HeaderKeyResolver` | 幂等键提取 |
+| `Fingerprinter` | `port.Fingerprinter` | `SHA256Fingerprinter` | 请求指纹计算 |
+
+### Redis 仓储选项
+
+```go
+repo := redisrepo.NewIdempotencyRecordRepository(
+    rds,
+    redisrepo.WithKeyPrefix("idem"),
+)
+```
+
+## 可观测性指标
+
+插件上报以下 Prometheus 指标：
+
+| 指标名 | 类型 | 标签 | 说明 |
+|---|---|---|---|
+| `idempotency_commit_total` | Counter | `result` (success/error) | 提交计数 |
+
+日志字段（结构化）：
+
+| 字段 | 说明 |
+|---|---|
+| `key_hash` | 幂等键 SHA-256 前 12 位 hex（不记录原始 key） |
+| `error` | 错误信息 |
+
+## 文档入口
 
 - [基于 go-zero 的分布式通用幂等性插件开发文档](docs/idempotency-plugin-development.md)
 
----
+## 里程碑进度
 
-## 集成测试报告
-
-测试文件：[tests/idempotency_plugin_test.go](tests/idempotency_plugin_test.go)  
-测试日期：2026-06-02  
-Go 版本：go1.25.1  
-测试结论：**25 个测试全部通过，未发现 bug。**
-
-### 测试环境
-
-- 仓储实现：`MemoryIdempotencyRecordRepository`（内存仓储，mutex 保证并发安全）
-- 时钟：自定义 `testClock`，可控制时间推进，避免依赖系统时钟
-- Key 解析：`HeaderKeyResolver`（从 HTTP Header `Idempotency-Key` 提取）
-- 指纹计算：`SHA256Fingerprinter`（含 JSON 规范化）
-- Owner 生成：`RandomOwnerFactory`（crypto/rand 生成唯一 owner）
-
-### 测试结果明细
-
-#### 生命周期测试
-
-| 测试 | 验证点 | 结果 |
+| 里程碑 | 内容 | 状态 |
 |---|---|---|
-| `TestFullLifecycleBeginCompleteReplay` | Begin → Complete → 重复 Begin 返回 Replay，携带缓存响应（状态码 201、body 一致） | PASS |
-| `TestConflictSameKeyDifferentBody` | 同 key 不同 body → 指纹不同 → 返回 Conflict | PASS |
-| `TestInProgressDuplicate` | 同 key 同 body，首个请求未 Complete → 后续返回 InProgress | PASS |
-| `TestDoubleCompleteFails` | 对已 Completed 的记录再次 Complete → 返回 `ErrInvalidState`，状态机不变量生效 | PASS |
-
-#### Abort 策略测试
-
-| 测试 | 验证点 | 结果 |
-|---|---|---|
-| `TestAbortDeleteAllowsReacquire` | `FailureModeDelete` 后 key 被删除，后续请求可重新 Acquire | PASS |
-| `TestAbortCacheStoresFailure` | `FailureModeCache` 后后续请求看到 Failed，携带 `ErrorCode` 和 `ErrorMessage` | PASS |
-| `TestAbortKeepProcessingTTL` | `FailureModeKeepProcessingTTL` 后记录保持 processing，后续请求返回 InProgress | PASS |
-
-#### Wait 策略测试
-
-| 测试 | 验证点 | 结果 |
-|---|---|---|
-| `TestWaitPolicyReplaysAfterComplete` | `DuplicateWait` 策略下，记录 Complete 后重复请求正确 Replay | PASS |
-| `TestWaitTimeoutReturnsInProgress` | Wait 超时后返回 InProgress，不会死循环 | PASS |
-| `TestWaitReplayContextCancellation` | Context 取消后 `WaitReplay` 及时退出并返回错误 | PASS |
-| `TestWaitReplayRecordMissing` | `WaitReplay` 查询不存在的 key → `Found=false` | PASS |
-
-#### 服务配置测试
-
-| 测试 | 验证点 | 结果 |
-|---|---|---|
-| `TestDisabledServiceReturnsSkipped` | `Disabled: true` → Begin 返回 Skipped | PASS |
-| `TestMissingKeyNotRequiredSkips` | `Required: false` 且无 key → 返回 Skipped | PASS |
-| `TestMissingKeyRequiredReturnsError` | `Required: true` 且无 key → 返回 `ErrMissingIdempotencyKey` | PASS |
-| `TestInvalidKeyFormatReturnsError` | key 长度不足 16 → 返回 `ErrInvalidIdempotencyKey` | PASS |
-| `TestNewServiceRequiresRepository` | 不传 Repository 构造 Service → 返回 `ErrRepositoryRequired` | PASS |
-
-#### 安全与隔离测试
-
-| 测试 | 验证点 | 结果 |
-|---|---|---|
-| `TestCompleteWrongOwnerFails` | 非 Owner 调用 Complete → `ErrOwnerMismatch`，防止越权提交 | PASS |
-| `TestCompleteNonexistentKeyFails` | 对不存在的 key 调用 Complete → `ErrInvalidState` | PASS |
-| `TestJSONCanonicalization` | `{"sku":"A","qty":1}` 与 `{"qty":1,"sku":"A"}` → 指纹相同（JSON 规范化），不会误判为 Conflict | PASS |
-| `TestDifferentTenantProducesConflict` | 同 key 不同 tenant → 指纹不同 → Conflict（scope 隔离生效） | PASS |
-| `TestResponseBodyIsDeepCopied` | Replay 返回的 body 被深拷贝，修改返回值的 body 不影响下次 Replay 结果 | PASS |
-| `TestCapturedResponseHeadersPreserved` | Complete 时传入的自定义 Header 在 Replay 时完整恢复 | PASS |
-
-#### 并发与边界测试
-
-| 测试 | 验证点 | 结果 |
-|---|---|---|
-| `TestConcurrentBeginsOnlyOneAcquires` | 20 goroutine 并发同 key Begin → 恰好 1 个 Acquired，19 个 InProgress | PASS |
-| `TestRecordExpiryAllowsReacquire` | 记录 TTL 过期后，新请求可以重新 Acquire | PASS |
-| `TestZeroNowUsesClock` | `Now` 为零值时自动使用 Clock 时间，不会 panic 或产生错误时间 | PASS |
-
-### 测试覆盖率分析
-
-按开发文档 §20.1 单元测试计划逐项对照：
-
-| 文档要求的测试项 | 覆盖状态 |
-|---|---|
-| Domain 聚合：begin / complete / abort / owner mismatch / fingerprint conflict | ✅ 全部覆盖 |
-| Value Object：key 长度/字符集、fingerprint 规范化、owner 唯一性 | ✅ 全部覆盖（边界值测试） |
-| Domain Service：DuplicatePolicy、FailureMode、TTL 规则 | ✅ 策略组合覆盖 |
-| Application Service：begin / replay / wait / complete / abort 编排 | ✅ 全部覆盖 |
-| KeyResolver：header、metadata、required/optional、无效格式 | ✅ 全部覆盖 |
-| Fingerprinter：JSON 字段顺序、空 body、租户/用户维度 | ✅ 全部覆盖 |
-| Response capture：状态码、header 过滤、body size limit | ✅ header 保存和深拷贝已验证 |
-| 并发：多请求同 key 竞态 | ✅ 20 并发验证 |
-
-### 结论
-
-当前 M1（领域层）+ M2（应用层与 Memory 仓储）实现：
-
-- ✅ 状态机正确：Acquired → Completed/Failed 转换及不变量均通过测试
-- ✅ 并发安全：Memory 仓储 mutex 保护，并发测试仅 1 个 Acquired
-- ✅ 指纹隔离：JSON 规范化 + scope（tenant/user）正确区分
-- ✅ Owner 鉴权：Complete/Abort 严格校验 owner，防止跨请求覆盖
-- ✅ TTL 机制：过期记录可重新获取，不会造成死锁
-- ✅ 容错能力：context 取消、超时、服务禁用、缺失 key 均正确处理
-
-**未发现 bug，插件核心逻辑达到开发文档 M1/M2 里程碑要求。**
-
----
-
-后续建议按文档中的里程碑推进：
-
-1. 领域层：聚合根、值对象、领域服务、仓储端口 ✅ 已完成
-2. 应用层：幂等应用服务、command、DTO、等待策略 ✅ 已完成
-3. 基础设施层：Memory 仓储 ✅ 已完成，Redis 仓储待开发
-4. 接口层：go-zero HTTP、Gin、net/http、gRPC/zrpc 适配器
-5. 示例项目、可观测性和压测
+| M1 | 领域层：聚合根、值对象、领域服务、仓储端口 | ✅ 完成 |
+| M2 | 应用层与 Memory 仓储：IdempotencyService、command、DTO | ✅ 完成 |
+| M3 | Redis 仓储：Lua 原子脚本、JSON record mapper | ✅ 完成 |
+| M4 | HTTP 适配器：net/http、go-zero、Gin 中间件 | ✅ 完成 |
+| M5 | gRPC 适配器：UnaryInterceptor、RPCCodec 端口与注册表 | ✅ 完成 |
+| M6 | 可观测性：Logger/Metrics/Tracer 端口 | ✅ 完成 |
+| + | 响应缓存策略：CaptureRules 领域服务 | ✅ 完成 |
+| + | TTL 自动续期：Heartbeat 组件 | ✅ 完成 |
