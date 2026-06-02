@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/senvejl117/go-idempotency/application/command"
-	"github.com/senvejl117/go-idempotency/application/dto"
-	appservice "github.com/senvejl117/go-idempotency/application/service"
-	"github.com/senvejl117/go-idempotency/domain/valueobject"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/command"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
+	appservice "github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // Option configures the middleware.

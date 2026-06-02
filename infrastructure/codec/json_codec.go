@@ -3,7 +3,7 @@ package codec
 import (
 	"encoding/json"
 
-	"github.com/senvejl117/go-idempotency/application/port"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/port"
 )
 
 // JSONCodec is the default RPCCodec for methods that do not register a

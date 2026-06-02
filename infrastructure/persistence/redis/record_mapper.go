@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/senvejl117/go-idempotency/domain/model"
-	"github.com/senvejl117/go-idempotency/domain/valueobject"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // redisRecord is the JSON wire format stored in Redis. It mirrors the schema

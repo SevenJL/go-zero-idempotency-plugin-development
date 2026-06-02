@@ -8,8 +8,8 @@ import (
 
 	"github.com/zeromicro/go-zero/rest"
 
-	"github.com/senvejl117/go-idempotency/application/service"
-	"github.com/senvejl117/go-idempotency/interfaces/middleware/httpx"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/interfaces/middleware/httpx"
 )
 
 // Middleware returns a go-zero rest.Middleware that can be used with

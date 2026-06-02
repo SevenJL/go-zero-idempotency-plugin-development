@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/senvejl117/go-idempotency/application/command"
-	"github.com/senvejl117/go-idempotency/application/dto"
-	appservice "github.com/senvejl117/go-idempotency/application/service"
-	"github.com/senvejl117/go-idempotency/domain/model"
-	domainservice "github.com/senvejl117/go-idempotency/domain/service"
-	"github.com/senvejl117/go-idempotency/domain/valueobject"
-	"github.com/senvejl117/go-idempotency/infrastructure/persistence/memory"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/command"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
+	appservice "github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
+	domainservice "github.com/SevenJL/go-zero-idempotency-plugin-development/domain/service"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/infrastructure/persistence/memory"
 )
 
 // ---------------------------------------------------------------------------

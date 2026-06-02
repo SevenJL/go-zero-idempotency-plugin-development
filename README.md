@@ -46,7 +46,7 @@
 ### 安装
 
 ```bash
-go get github.com/senvejl117/go-idempotency
+go get github.com/SevenJL/go-zero-idempotency-plugin-development
 ```
 
 ### go-zero HTTP
@@ -56,9 +56,9 @@ import (
     "github.com/zeromicro/go-zero/core/stores/redis"
     "github.com/zeromicro/go-zero/rest"
 
-    appservice "github.com/senvejl117/go-idempotency/application/service"
-    "github.com/senvejl117/go-idempotency/infrastructure/persistence/redis"
-    gozerohttp "github.com/senvejl117/go-idempotency/interfaces/middleware/gozero"
+    appservice "github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
+    "github.com/SevenJL/go-zero-idempotency-plugin-development/infrastructure/persistence/redis"
+    gozerohttp "github.com/SevenJL/go-zero-idempotency-plugin-development/interfaces/middleware/gozero"
 )
 
 // Composition root
@@ -78,7 +78,7 @@ server.Use(gozerohttp.Middleware(idemSvc))
 ```go
 import (
     "github.com/gin-gonic/gin"
-    ginidem "github.com/senvejl117/go-idempotency/interfaces/middleware/gin"
+    ginidem "github.com/SevenJL/go-zero-idempotency-plugin-development/interfaces/middleware/gin"
 )
 
 r := gin.New()
@@ -90,7 +90,7 @@ r.POST("/api/orders", createOrder)
 
 ```go
 import (
-    "github.com/senvejl117/go-idempotency/interfaces/middleware/httpx"
+    "github.com/SevenJL/go-zero-idempotency-plugin-development/interfaces/middleware/httpx"
 )
 
 mux := http.NewServeMux()
@@ -102,8 +102,8 @@ mux.Handle("/api/orders", httpx.Middleware(idemSvc)(http.HandlerFunc(createOrder
 ```go
 import (
     "google.golang.org/grpc"
-    grpcidem "github.com/senvejl117/go-idempotency/interfaces/middleware/grpc"
-    "github.com/senvejl117/go-idempotency/infrastructure/codec"
+    grpcidem "github.com/SevenJL/go-zero-idempotency-plugin-development/interfaces/middleware/grpc"
+    "github.com/SevenJL/go-zero-idempotency-plugin-development/infrastructure/codec"
 )
 
 registry := codec.NewCodecRegistry(nil)

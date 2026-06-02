@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/senvejl117/go-idempotency/domain/model"
-	"github.com/senvejl117/go-idempotency/domain/valueobject"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 type IdempotencyRecordRepository struct {

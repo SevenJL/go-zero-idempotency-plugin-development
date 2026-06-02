@@ -3,7 +3,7 @@ package port
 import (
 	"context"
 
-	"github.com/senvejl117/go-idempotency/domain/valueobject"
+	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 type OwnerFactory interface {
