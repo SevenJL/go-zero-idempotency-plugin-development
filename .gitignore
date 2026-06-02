@@ -1,0 +1,9 @@
+# Compiled binaries
+/gin
+examples/gin/gin
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

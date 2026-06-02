@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Idempotency Plugin Test</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --text: #c9d1d9; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d2991d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: var(--bg); color: var(--text); padding: 24px; }
+  .container { max-width: 900px; margin: 0 auto; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .lang-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+              border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
+  .lang-btn:hover { color: var(--text); border-color: var(--accent); }
+  .lang-btn.active { color: var(--accent); border-color: var(--accent); }
+  .card { background: var(--card); border: 1px solid var(--border);
+          border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin-bottom: 12px; color: var(--accent); }
+  .row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input, textarea, button, select {
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; font-family: inherit;
+  }
+  textarea { width: 100%; min-height: 60px; resize: vertical; }
+  input[type="text"] { width: 240px; }
+  button { cursor: pointer; font-weight: 600; transition: background .15s; }
+  button:hover { opacity: 0.85; }
+  .btn-primary { background: #238636; border-color: #2ea043; color: #fff; }
+  .btn-danger { background: #da3633; border-color: #f85149; color: #fff; }
+  .btn-outline { background: transparent; }
+  .btn-outline:hover { background: var(--border); }
+  .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  #log { background: #0d1117; border: 1px solid var(--border); border-radius: 6px;
+         padding: 12px; max-height: 400px; overflow-y: auto; font-family: monospace;
+         font-size: 12px; line-height: 1.6; }
+  .log-entry { padding: 2px 0; border-bottom: 1px solid var(--border); }
+  .log-acquired { color: var(--green); }
+  .log-replay { color: var(--accent); }
+  .log-conflict { color: var(--red); }
+  .log-inprogress { color: var(--yellow); }
+  .log-error { color: var(--red); }
+  .flex { display: flex; gap: 12px; align-items: flex-end; }
+  .mt { margin-top: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>Idempotency Plugin Test UI</h1>
+      <p class="sub">gin middleware · <code>Idempotency-Key</code> header</p>
+    </div>
+    <div class="row" style="gap:8px">
+      <button class="lang-btn active" onclick="switchLang('zh')">中</button>
+      <button class="lang-btn" onclick="switchLang('en')" id="enBtn">EN</button>
+    </div>
+  </div>
+
+  <!-- Request panel -->
+  <div class="card">
+    <h2 data-zh="发送请求" data-en="Send Request">发送请求</h2>
+    <div class="row">
+      <div>
+        <label data-zh="Idempotency-Key（≥16字符）" data-en="Idempotency-Key (≥16 chars)">Idempotency-Key（≥16字符）</label>
+        <input type="text" id="idemKey" value="order-create-00123" placeholder="order-create-00123">
+      </div>
+      <div>
+        <label>Endpoint</label>
+        <select id="endpoint"><option value="/api/orders">POST /api/orders</option></select>
+      </div>
+    </div>
+    <div>
+      <label data-zh="请求体 (JSON)" data-en="Request Body (JSON)">请求体 (JSON)</label>
+      <textarea id="reqBody">{"sku":"SKU-001","qty":2}</textarea>
+    </div>
+    <div class="btn-group mt">
+      <button class="btn-primary" onclick="sendRequest()" data-zh="发送请求" data-en="Send Request">发送请求</button>
+      <button class="btn-outline" onclick="sendReplay()" data-zh="相同请求（验证Replay）" data-en="Same Request (Replay)">相同请求（验证Replay）</button>
+      <button class="btn-outline" onclick="sendConflict()" data-zh="不同Body（验证Conflict）" data-en="Diff Body (Conflict)">不同Body（验证Conflict）</button>
+      <button class="btn-outline" onclick="sendNewKey()" data-zh="新建Key" data-en="New Key">新建Key</button>
+    </div>
+  </div>
+
+  <!-- Scenario cards -->
+  <div class="card">
+    <h2 data-zh="快捷场景" data-en="Quick Scenarios">快捷场景</h2>
+    <div class="btn-group">
+      <button class="btn-outline" onclick="scenario('lifecycle')" data-zh="生命周期：获取 → 重放" data-en="Lifecycle: Acquire → Replay">生命周期：获取 → 重放</button>
+      <button class="btn-outline" onclick="scenario('conflict')" data-zh="冲突：同Key不同Body" data-en="Conflict: same key diff body">冲突：同Key不同Body</button>
+      <button class="btn-outline" onclick="scenario('missing')" data-zh="缺少Key（放行）" data-en="Missing key (pass)" >缺少Key（放行）</button>
+      <button class="btn-outline" onclick="scenario('invalid')" data-zh="无效Key（报错）" data-en="Invalid key (error)">无效Key（报错）</button>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <h2 data-zh="响应日志" data-en="Response Log">响应日志</h2>
+    <button class="btn-outline" style="margin-bottom:8px" onclick="document.getElementById('log').innerHTML=''"
+            data-zh="清除" data-en="Clear">清除</button>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+// ---- i18n ----
+const messages = {
+  zh: {},
+  en: {}
+};
+// Collect all data-zh/data-en attributes
+document.querySelectorAll('[data-zh]').forEach(el => {
+  messages.zh[el.dataset.zh] = el;
+});
+// We'll use a simpler approach: store text by key pattern
+
+let lang = 'zh';
+function switchLang(l) {
+  lang = l;
+  document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(l === 'zh' ? 'zhBtn' : 'enBtn')?.classList.add('active');
+  // Actually, the buttons have no ids — let's fix:
+  document.querySelectorAll('.lang-btn')[l === 'zh' ? 0 : 1].classList.add('active');
+
+  document.querySelectorAll('[data-zh][data-en]').forEach(el => {
+    el.textContent = l === 'zh' ? el.dataset.zh : el.dataset.en;
+    if (el.tagName === 'INPUT') el.value = l === 'zh' ? el.dataset.zh : el.dataset.en;
+  });
+  document.querySelectorAll('[data-zh]:not([data-en])').forEach(el => {
+    // These are zh-only, restore when switching to zh
+    if (l === 'zh') el.textContent = el.dataset.zh;
+  });
+  // Update placeholders
+  document.querySelectorAll('input[data-zh]').forEach(el => {
+    el.placeholder = l === 'zh' ? el.dataset.zh : (el.dataset.en || '');
+  });
+
+  // Re-render log entries text
+  updateLogText();
+}
+
+// Fix: store original log entries with i18n keys and render per lang
+let logEntries = [];
+function log(keyZh, keyEn, cls) {
+  logEntries.push({ zh: keyZh, en: keyEn, cls: cls, time: new Date().toLocaleTimeString() });
+  renderLogEntry(logEntries[logEntries.length - 1]);
+}
+function renderLogEntry(entry) {
+  const d = document.getElementById('log');
+  const msg = lang === 'zh' ? entry.zh : entry.en;
+  d.innerHTML += `<div class="log-entry"><span class="${entry.cls}">[${entry.time}]</span> ${msg}</div>`;
+  d.scrollTop = d.scrollHeight;
+}
+function updateLogText() {
+  const d = document.getElementById('log');
+  const entries = d.querySelectorAll('.log-entry');
+  let i = 0;
+  for (const entry of entries) {
+    if (i < logEntries.length) {
+      const e = logEntries[i];
+      const msg = lang === 'zh' ? e.zh : e.en;
+      entry.innerHTML = `<span class="${e.cls}">[${e.time}]</span> ${msg}`;
+    }
+    i++;
+  }
+}
+
+// ---- API ----
+const BASE = window.location.origin;
+
+async function sendRequest() {
+  const key = document.getElementById('idemKey').value;
+  const body = document.getElementById('reqBody').value;
+  try {
+    const resp = await fetch(BASE + '/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: body
+    });
+    const data = await resp.json();
+    const replayed = resp.headers.get('Idempotency-Replayed');
+    const status = resp.status;
+
+    if (replayed === 'true') {
+      log(
+        `REPLAY (${status}) | order_id=${data.order_id || 'cached'} | body=${JSON.stringify(data)}`,
+        `REPLAY (${status}) | order_id=${data.order_id || 'cached'} | body=${JSON.stringify(data)}`,
+        'log-replay'
+      );
+    } else if (status === 409) {
+      log(
+        `CONFLICT (${status}) | ${data.error || JSON.stringify(data)}`,
+        `CONFLICT (${status}) | ${data.error || JSON.stringify(data)}`,
+        'log-conflict'
+      );
+    } else if (status === 201) {
+      log(
+        `ACQUIRED (${status}) | order_id=${data.order_id}`,
+        `ACQUIRED (${status}) | order_id=${data.order_id}`,
+        'log-acquired'
+      );
+    } else {
+      log(
+        `RESP (${status}) | ${JSON.stringify(data)}`,
+        `RESP (${status}) | ${JSON.stringify(data)}`,
+        'log-acquired'
+      );
+    }
+  } catch (e) {
+    log(`ERROR: ${e.message}`, `ERROR: ${e.message}`, 'log-error');
+  }
+}
+
+function sendReplay() {
+  log('→ 发送相同 Key 和 Body（预期 REPLAY）', '→ Sending same key & body (expect REPLAY)', 'log-acquired');
+  sendRequest();
+}
+
+function sendConflict() {
+  const orig = document.getElementById('reqBody').value;
+  document.getElementById('reqBody').value = '{"sku":"SKU-002","qty":99}';
+  log('→ 相同 Key，不同 Body（预期 CONFLICT）', '→ Same key, DIFFERENT body (expect CONFLICT)', 'log-conflict');
+  sendRequest().then(() => { document.getElementById('reqBody').value = orig; });
+}
+
+function sendNewKey() {
+  const r = Math.random().toString(36).substring(2, 18);
+  document.getElementById('idemKey').value = r;
+  log(`→ 新 Key: ${r}`, `→ New key: ${r}`, 'log-acquired');
+  sendRequest();
+}
+
+async function scenario(name) {
+  log(`=== ${lang === 'zh' ? '场景' : 'Scenario'}: ${name} ===`, `=== Scenario: ${name} ===`, '');
+  const key = 'scenario-' + Date.now() + '-X';
+
+  switch(name) {
+    case 'lifecycle': {
+      document.getElementById('idemKey').value = key;
+      document.getElementById('reqBody').value = '{"sku":"LIFE","qty":1}';
+      await sendRequest();
+      setTimeout(async () => {
+        log('→ 再次发送相同请求（预期 REPLAY）...', '→ Sending same request again (expect REPLAY)...', 'log-acquired');
+        await sendRequest();
+      }, 300);
+      break;
+    }
+    case 'conflict': {
+      document.getElementById('idemKey').value = key;
+      document.getElementById('reqBody').value = '{"sku":"A","qty":1}';
+      await sendRequest();
+      setTimeout(async () => {
+        log('→ 相同 Key，不同 Body（预期 CONFLICT）...', '→ Same key, DIFFERENT body (expect CONFLICT)...', 'log-conflict');
+        document.getElementById('reqBody').value = '{"sku":"B","qty":5}';
+        await sendRequest();
+      }, 300);
+      break;
+    }
+    case 'missing': {
+      document.getElementById('idemKey').value = '';
+      document.getElementById('reqBody').value = '{"sku":"NOKEY"}';
+      log('→ 不携带 Idempotency-Key（预期放行）...', '→ Sending WITHOUT idempotency key (expect pass-through)...', '');
+      await fetch(BASE + '/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"sku":"NOKEY"}'
+      }).then(r => r.json()).then(d => {
+        log(`放行 | order_id=${d.order_id} | (无 Key → 直接通过)`, `PASS-THROUGH | order_id=${d.order_id} | (no key → pass)`, 'log-acquired');
+      }).catch(e => log(`ERROR: ${e.message}`, `ERROR: ${e.message}`, 'log-error'));
+      break;
+    }
+    case 'invalid': {
+      document.getElementById('idemKey').value = 'short';
+      document.getElementById('reqBody').value = '{"sku":"BAD"}';
+      log('→ 使用无效 Key "short"（预期报错）...', '→ Sending with INVALID key "short" (expect error)...', '');
+      try {
+        const r = await fetch(BASE + '/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'short' },
+          body: '{"sku":"BAD"}'
+        });
+        const d = await r.json();
+        log(`错误 (${r.status}) | ${JSON.stringify(d)}`, `ERROR (${r.status}) | ${JSON.stringify(d)}`, 'log-error');
+      } catch(e) { log(`FETCH ERROR: ${e.message}`, `FETCH ERROR: ${e.message}`, 'log-error'); }
+      break;
+    }
+  }
+}
+</script>
+</body>
+</html>

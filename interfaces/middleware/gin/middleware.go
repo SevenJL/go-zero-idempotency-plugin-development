@@ -102,15 +102,18 @@ func writeReplayGin(c *gin.Context, result dto.BeginResult) {
 			c.Header(k, v)
 		}
 	}
-	if result.Response.StatusCode != 0 {
-		c.AbortWithStatusJSON(result.Response.StatusCode, result.Response.Body)
-		return
+	status := result.Response.StatusCode
+	if status == 0 {
+		status = http.StatusOK
 	}
+	// Write the body as raw bytes — it is already serialised (JSON / proto / etc.),
+	// so we must not JSON-encode it again.
 	if len(result.Response.Body) > 0 {
-		c.AbortWithStatusJSON(http.StatusOK, result.Response.Body)
-		return
+		c.Data(status, "application/json", result.Response.Body)
+	} else {
+		c.AbortWithStatus(status)
 	}
-	c.AbortWithStatus(http.StatusOK)
+	c.Abort()
 }
 
 func isReadOnlyMethod(method string) bool {
