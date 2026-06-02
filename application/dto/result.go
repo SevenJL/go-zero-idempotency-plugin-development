@@ -1,8 +1,8 @@
 package dto
 
 import (
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 type BeginResultType string

@@ -10,8 +10,8 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // redisClient is the subset of go-zero's *redis.Redis that this

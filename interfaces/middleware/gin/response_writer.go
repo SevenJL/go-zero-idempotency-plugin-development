@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
 )
 
 // ginResponseWriter wraps gin.ResponseWriter to capture the response for replay.

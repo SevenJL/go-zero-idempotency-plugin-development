@@ -3,7 +3,7 @@ package codec
 import (
 	"sync"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/port"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
 )
 
 type registryEntry struct {

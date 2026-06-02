@@ -9,10 +9,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/command"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
-	appservice "github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
+	appservice "github.com/sevenjl/go-zero-idempotency-plugin-development/application/service"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // Middleware returns a gin.HandlerFunc that provides idempotency protection.

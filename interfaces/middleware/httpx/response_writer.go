@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"net/http"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
 )
 
 // captureResponseWriter wraps http.ResponseWriter to capture the status code,

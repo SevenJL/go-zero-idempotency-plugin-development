@@ -3,7 +3,7 @@ package command
 import (
 	"time"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
 )
 
 type BeginCommand struct {

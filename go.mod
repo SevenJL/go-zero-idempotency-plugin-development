@@ -1,4 +1,4 @@
-module github.com/SevenJL/go-zero-idempotency-plugin-development
+module github.com/sevenjl/go-zero-idempotency-plugin-development
 
 go 1.25.0
 

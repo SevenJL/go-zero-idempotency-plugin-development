@@ -1,6 +1,6 @@
 package dto
 
-import "github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+import "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 
 type RequestContext struct {
 	Operation valueobject.Operation

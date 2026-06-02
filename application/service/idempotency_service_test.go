@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/command"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
-	appservice "github.com/SevenJL/go-zero-idempotency-plugin-development/application/service"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
-	domainservice "github.com/SevenJL/go-zero-idempotency-plugin-development/domain/service"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/infrastructure/persistence/memory"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
+	appservice "github.com/sevenjl/go-zero-idempotency-plugin-development/application/service"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
+	domainservice "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/service"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/infrastructure/persistence/memory"
 )
 
 type fixedClock struct {

@@ -7,13 +7,13 @@ import (
 	"errors"
 	"time"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/command"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/dto"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/application/port"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/model"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/repository"
-	domainservice "github.com/SevenJL/go-zero-idempotency-plugin-development/domain/service"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
+	domainservice "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/service"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 var ErrRepositoryRequired = errors.New("idempotency repository is required")

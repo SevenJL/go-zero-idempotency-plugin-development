@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/repository"
-	"github.com/SevenJL/go-zero-idempotency-plugin-development/domain/valueobject"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // Heartbeat periodically extends the TTL of a processing idempotency record

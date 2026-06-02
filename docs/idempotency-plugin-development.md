@@ -192,7 +192,7 @@ idempotency/
 如果项目后续以 Go module 形式发布，建议模块名为：
 
 ```text
-github.com/SevenJL/go-zero-idempotency-plugin-development
+github.com/sevenjl/go-zero-idempotency-plugin-development
 ```
 
 内部包名建议使用 `idempotency`，避免和 go-zero 框架强耦合。
