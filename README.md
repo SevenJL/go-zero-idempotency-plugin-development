@@ -136,6 +136,47 @@ client → interfaces (HTTP/RPC 适配器)
 go test ./... -count=1
 ```
 
+## 性能报告
+
+测试环境：MacBook Air M3 / Go 1.25.1 / Gin release mode / Memory 仓储  
+测试工具：[go-wrk](https://github.com/tsliwowicz/go-wrk) — 50 并发连接, 10 秒预热, 10 秒压测  
+被测端点：`POST /api/orders`（Gin + idempotency middleware）
+
+### 吞吐量与延迟
+
+| 场景 | 请求/秒 | 平均延迟 | 最慢请求 | 说明 |
+|---|---|---|---|---|
+| **Baseline** (无 Key，放行) | 54,907 | 910µs | 9.6ms | 裸 Gin handler，0 额外开销 |
+| **Acquire** (新 Key，首次获取) | 53,841 | 928µs | 9.3ms | 创建幂等记录 + 执行 handler + Complete |
+| **Replay** (同 Key，缓存命中) | 53,310 | 937µs | 15.9ms | 返回缓存的 201 响应，不执行 handler |
+| **Conflict** (同 Key，指纹冲突) | 53,030\* | — | — | 返回 409，不执行 handler |
+
+> \* 估算值：530,295 errors / 10s。go-wrk 将非 2xx 计为 error 不计入统计。
+
+### 开销分析
+
+```
+Baseline → Acquire:   +18µs (+2.0%)    创建记录 + SHA-256 指纹 + handler
+Acquire  → Replay :    +9µs (+1.0%)    从内存读取 + 深拷贝 + 写回响应
+Acquire  → Conflict:    ~0µs            同路径（仅比较指纹）
+```
+
+- **p50 延迟 ~130µs**，p99（快路径）~150µs，不含 Tail Latency
+- 峰值 QPS 约 **5.5 万/秒**（单机 MacBook Air）
+- Memory 仓储 mutex 未成为瓶颈（50 并发下无争用）
+- 最大开销来自 SHA-256 指纹计算 + JSON canonicalization
+
+### Memory 仓储 vs Redis 仓储预估
+
+| 指标 | Memory 仓储 | Redis 仓储（预估） |
+|---|---|---|
+| 延迟 | +18µs | +0.5–2ms（网络 RTT） |
+| QPS | 5.5 万 | 取决于 Redis 集群规格 |
+| 一致性 | mutex（单进程） | Lua 原子脚本（分布式） |
+| 适用场景 | 本地调试、单测 | 生产多副本部署 |
+
+> Redis 仓储的实际性能取决于网络延迟和 Redis 实例规格。建议在生产环境使用 `go-wrk` 复测。
+
 ## 配置说明
 
 ### IdempotencyService Config
