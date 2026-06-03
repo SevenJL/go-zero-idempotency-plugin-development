@@ -19,7 +19,7 @@ All notable changes to the go-zero idempotency plugin.
   - `OTelLogger` — OpenTelemetry slog-based logger adapter
   - `OTelMetrics` — OpenTelemetry metrics adapter (counters + histograms)
   - `OTelTracer` — OpenTelemetry tracing adapter (span creation + attributes)
-  - Redis integration tests (12 scenarios, `//go:build integration`)
+  - Redis integration tests (10 scenarios, `//go:build integration`)
   - `deploy/grafana-dashboard.json` — Pre-built Grafana dashboard (10 panels)
 
 - **P2 — Enhanced competitiveness**
@@ -33,10 +33,17 @@ All notable changes to the go-zero idempotency plugin.
   - `examples/gozero-http/` — go-zero HTTP example with idempotency middleware
   - `examples/grpc/` — Native gRPC example with unary interceptor
 
+- **P3 — Completeness**
+  - `infrastructure/persistence/sql/` — MySQL/PostgreSQL repository with schema
+  - `infrastructure/persistence/redis/sentinel.go` — Redis Sentinel HA support
+  - `application/service/config_watcher.go` — YAML config hot-reload (5s polling)
+  - pprof endpoints in Gin and go-zero-http examples (`/debug/pprof/`)
+
 ### Changed
 
 - Gin example: `gin.New()` + `gin.Logger()` + `gin.Recovery()` replaces `gin.Default()`
 - Gin example: added `ReadTimeout`/`WriteTimeout`/`IdleTimeout` to HTTP server
+- go-zero-http example: added pprof and health check endpoints
 - `.gitignore`: added coverage, Docker, OS entries
 - Application layer: added `Notifier` port; rewired `IdempotencyService.WaitReplay` for Pub/Sub
 - Redis repository: encryption support in `record_mapper.go` via `BodyEncryptor`
