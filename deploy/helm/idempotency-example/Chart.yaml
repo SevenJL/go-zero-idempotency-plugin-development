@@ -1,0 +1,16 @@
+apiVersion: v2
+name: idempotency-example
+description: Helm chart for the go-zero idempotency plugin example application
+type: application
+version: 0.2.0
+appVersion: "0.2.0"
+keywords:
+  - go-zero
+  - idempotency
+  - middleware
+  - distributed
+home: https://github.com/sevenjl/go-zero-idempotency-plugin-development
+sources:
+  - https://github.com/sevenjl/go-zero-idempotency-plugin-development
+maintainers:
+  - name: sevenjl

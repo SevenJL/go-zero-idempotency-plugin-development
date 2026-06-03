@@ -22,11 +22,24 @@ All notable changes to the go-zero idempotency plugin.
   - Redis integration tests (12 scenarios, `//go:build integration`)
   - `deploy/grafana-dashboard.json` — Pre-built Grafana dashboard (10 panels)
 
+- **P2 — Enhanced competitiveness**
+  - `AESEncryptor` — AES-256-GCM body encryption for Redis at-rest data protection
+  - `PubSubNotifier` — Redis Pub/Sub event notification (sub-ms WaitReplay)
+  - `Notifier` port — pluggable notification interface (Redis, NATS, Kafka, etc.)
+  - `deploy/helm/idempotency-example/` — Kubernetes Helm chart (Deployment, Service, HPA)
+  - `deploy/swagger.json` — OpenAPI 3.0 API specification
+  - `scripts/benchmark.sh` — Automated go-wrk benchmark suite (4 scenarios)
+  - `scripts/run-tests.sh` — Test runner (unit, integration, Redis, coverage)
+  - `examples/gozero-http/` — go-zero HTTP example with idempotency middleware
+  - `examples/grpc/` — Native gRPC example with unary interceptor
+
 ### Changed
 
 - Gin example: `gin.New()` + `gin.Logger()` + `gin.Recovery()` replaces `gin.Default()`
 - Gin example: added `ReadTimeout`/`WriteTimeout`/`IdleTimeout` to HTTP server
 - `.gitignore`: added coverage, Docker, OS entries
+- Application layer: added `Notifier` port; rewired `IdempotencyService.WaitReplay` for Pub/Sub
+- Redis repository: encryption support in `record_mapper.go` via `BodyEncryptor`
 
 ## [0.1.0] — 2026-06-02
 

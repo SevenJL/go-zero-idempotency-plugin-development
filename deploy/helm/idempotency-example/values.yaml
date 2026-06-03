@@ -1,0 +1,118 @@
+# Default values for idempotency-example.
+replicaCount: 2
+
+image:
+  repository: idempotency-example
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext: {}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: idempotency-example.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+
+# Redis configuration (external Redis)
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+# Idempotency plugin configuration
+idempotency:
+  enabled: true
+  scope: "example-api"
+  keyHeader: "Idempotency-Key"
+  keyRequired: true
+  duplicatePolicy: "reject"  # reject | wait | pass_through
+  failureMode: "delete"       # delete | cache
+  storageFailureMode: "fail_closed"  # fail_closed | fail_open
+  processingTTL: "30s"
+  completedTTL: "24h"
+  failedTTL: "5m"
+  waitTimeout: "5s"
+  waitInterval: "50ms"
+  capture:
+    maxBodyBytes: 1048576
+    contentTypes:
+      - "application/json"
+    excludedHeaders:
+      - "Set-Cookie"
+      - "Authorization"
+      - "Cookie"
+    cacheStatus2xx: true
+
+# Observability
+observability:
+  logging:
+    level: "info"
+    format: "json"  # json | console
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false
+    endpoint: ""
+
+# Health probes
+probes:
+  liveness:
+    path: /health
+    initialDelaySeconds: 5
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /ready
+    initialDelaySeconds: 3
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 2
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

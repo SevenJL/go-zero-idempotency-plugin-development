@@ -38,6 +38,11 @@ type Config struct {
 
 	// Tracer creates spans for distributed tracing. Defaults to no-op.
 	Tracer port.Tracer
+
+	// Notifier publishes and subscribes to state-transition events.
+	// When set, WaitReplay uses real-time Pub/Sub instead of polling.
+	// Defaults to no-op (polling fallback).
+	Notifier port.Notifier
 }
 
 func (c Config) normalized() Config {
@@ -69,6 +74,9 @@ func (c Config) normalized() Config {
 	}
 	if c.Tracer == nil {
 		c.Tracer = port.NoopTracer()
+	}
+	if c.Notifier == nil {
+		c.Notifier = port.NoopNotifier()
 	}
 	return c
 }

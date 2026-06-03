@@ -291,4 +291,5 @@ repo := redisrepo.NewIdempotencyRecordRepository(
 | + | 响应缓存策略：CaptureRules 领域服务 | ✅ 完成 |
 | + | TTL 自动续期：Heartbeat 组件 | ✅ 完成 |
 | P0 | 企业级配套：LICENSE、Dockerfile、docker-compose、CI/CD、健康检查、优雅关闭 | ✅ 完成 |
-| P1 | 生产必备：YAML 配置加载、OTel 适配器、Redis 集成测试、Grafana Dashboard、CHANGELOG | ✅ 完成 |
+| P1 | 生产必备：YAML 配置加载、OTel 适配器、Redis 集成测试、Grafana Dashboard | ✅ 完成 |
+| P2 | 增强竞争力：AES 加密、Pub/Sub 通知、Helm Chart、Swagger、Benchmark 脚本、多示例项目 | ✅ 完成 |

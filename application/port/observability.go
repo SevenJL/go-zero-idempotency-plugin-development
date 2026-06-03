@@ -77,3 +77,28 @@ func NoopMetrics() Metrics { return noopMetrics{} }
 
 // NoopTracer returns a Tracer that creates no-op spans.
 func NoopTracer() Tracer { return noopTracer{} }
+
+// ---------------------------------------------------------------------------
+// Notifier port — real-time state transition events
+// ---------------------------------------------------------------------------
+
+// Notifier publishes and subscribes to state-transition events, enabling
+// sub-millisecond WaitReplay instead of 50ms polling. Implementations
+// may use Redis Pub/Sub, NATS, Kafka, or any message bus.
+type Notifier interface {
+	// Notify publishes a state-transition event to the given channel.
+	Notify(ctx context.Context, channel, message string) error
+
+	// Wait subscribes to a channel and blocks until a message arrives
+	// or the context is cancelled. Returns the message payload.
+	Wait(ctx context.Context, channel string) (string, error)
+}
+
+type noopNotifier struct{}
+
+func (noopNotifier) Notify(_ context.Context, _, _ string) error        { return nil }
+func (noopNotifier) Wait(_ context.Context, _ string) (string, error)   { return "", nil }
+
+// NoopNotifier returns a Notifier that is a no-op. The service falls back to
+// polling when this is used.
+func NoopNotifier() Notifier { return noopNotifier{} }

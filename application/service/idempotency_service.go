@@ -34,9 +34,10 @@ type IdempotencyService struct {
 	waitTimeout  time.Duration
 	waitInterval time.Duration
 
-	logger  port.Logger
-	metrics port.Metrics
-	tracer  port.Tracer
+	logger   port.Logger
+	metrics  port.Metrics
+	tracer   port.Tracer
+	notifier port.Notifier
 }
 
 func NewIdempotencyService(config Config) (*IdempotencyService, error) {
@@ -60,6 +61,7 @@ func NewIdempotencyService(config Config) (*IdempotencyService, error) {
 		logger:        config.Logger,
 		metrics:       config.Metrics,
 		tracer:        config.Tracer,
+		notifier:      config.Notifier,
 	}, nil
 }
 
@@ -228,8 +230,66 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 		deadline = s.clock.Now().Add(s.waitTimeout)
 	}
 
+	// Check initial state
+	record, err := s.repo.Find(ctx, cmd.Key)
+	if err != nil {
+		return dto.ReplayResult{}, err
+	}
+	if record == nil {
+		return dto.ReplayResult{Found: false, Key: cmd.Key}, nil
+	}
+	if record.Status() == model.StatusCompleted || record.Status() == model.StatusFailed {
+		return dto.ReplayResult{
+			Found:        true,
+			Key:          cmd.Key,
+			Record:       record,
+			Response:     fromDomainResponse(record.Response()),
+			ErrorCode:    record.ErrorCode(),
+			ErrorMessage: record.ErrorMessage(),
+		}, nil
+	}
+
+	// Try Pub/Sub notification if available — falls through to polling
+	// if the notifier doesn't deliver or the context times out.
+	channel := "idempotency:events:" + cmd.Key.String()
+
+	// Create a context that respects both the deadline and the caller's context.
+	notifyCtx, cancelNotify := context.WithDeadline(ctx, deadline)
+	defer cancelNotify()
+
+	// Attempt notification-based wait concurrently with polling.
+	// If the notifier delivers first, we short-circuit.
+	notifyCh := make(chan dto.ReplayResult, 1)
+	go func() {
+		msg, err := s.notifier.Wait(notifyCtx, channel)
+		if err != nil {
+			return // context cancelled or deadline exceeded
+		}
+		_ = msg // message signals state change; we re-check the record below
+		record, err := s.repo.Find(ctx, cmd.Key)
+		if err != nil {
+			return
+		}
+		if record == nil {
+			return
+		}
+		if record.Status() == model.StatusCompleted || record.Status() == model.StatusFailed {
+			notifyCh <- dto.ReplayResult{
+				Found:        true,
+				Key:          cmd.Key,
+				Record:       record,
+				Response:     fromDomainResponse(record.Response()),
+				ErrorCode:    record.ErrorCode(),
+				ErrorMessage: record.ErrorMessage(),
+			}
+		}
+	}()
+
+	// Polling loop as fallback
 	for {
 		select {
+		case result := <-notifyCh:
+			return result, nil
 		case <-ctx.Done():
 			return dto.ReplayResult{}, ctx.Err()
 		default:
@@ -260,8 +320,6 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 		if remaining := deadline.Sub(now); remaining < sleepFor {
 			sleepFor = remaining
 		}
-		// Keep the polling loop in the application layer. Adapters decide how to
-		// render the timeout, while repositories only expose the current record.
 		s.clock.Sleep(sleepFor)
 	}
 }

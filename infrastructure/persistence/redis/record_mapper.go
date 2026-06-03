@@ -44,24 +44,52 @@ type redisError struct {
 }
 
 // marshalRecord converts a domain IdempotencyRecord to JSON bytes for Redis
-// storage. It uses only the public accessor methods, respecting DDD encapsulation.
-func marshalRecord(r *model.IdempotencyRecord) ([]byte, error) {
-	rr := toRedisRecord(r)
+// storage. When encryptor is non-nil, the response body is encrypted via
+// AES-GCM before encoding.
+func marshalRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) ([]byte, error) {
+	rr := toRedisRecord(r, encryptor)
 	return json.Marshal(rr)
 }
 
 // unmarshalRecord reconstructs a domain IdempotencyRecord from JSON bytes read
-// from Redis. It uses model.RestoreRecord to bypass construction-time validation
-// (the stored data is already trusted).
-func unmarshalRecord(data []byte) (*model.IdempotencyRecord, error) {
+// from Redis. When encryptor is non-nil, the stored body is decrypted after
+// decoding.
+func unmarshalRecord(data []byte, encryptor BodyEncryptor) (*model.IdempotencyRecord, error) {
 	var rr redisRecord
 	if err := json.Unmarshal(data, &rr); err != nil {
 		return nil, err
 	}
-	return fromRedisRecord(rr), nil
+	return fromRedisRecord(rr, encryptor), nil
 }
 
-func toRedisRecord(r *model.IdempotencyRecord) redisRecord {
+// encodeBody applies optional encryption to the response body.
+func encodeBody(body []byte, encryptor BodyEncryptor) string {
+	if encryptor != nil {
+		encrypted, err := encryptor.Encrypt(body)
+		if err == nil {
+			return encrypted
+		}
+	}
+	return base64.StdEncoding.EncodeToString(body)
+}
+
+// decodeBody reverses encodeBody.
+func decodeBody(encoded string, encryptor BodyEncryptor) ([]byte, error) {
+	if encryptor != nil {
+		return encryptor.Decrypt(encoded)
+	}
+	return base64.StdEncoding.DecodeString(encoded)
+}
+
+// bodyEncoding returns the encoding label for the stored body.
+func bodyEncoding(encryptor BodyEncryptor) string {
+	if encryptor != nil {
+		return "aes-gcm+base64"
+	}
+	return "base64"
+}
+
+func toRedisRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) redisRecord {
 	rr := redisRecord{
 		Version:     1,
 		Status:      r.Status().String(),
@@ -83,8 +111,8 @@ func toRedisRecord(r *model.IdempotencyRecord) redisRecord {
 		rr.Response = &redisCapturedResponse{
 			StatusCode:   resp.StatusCode,
 			Headers:      resp.Headers,
-			Body:         base64.StdEncoding.EncodeToString(resp.Body),
-			BodyEncoding: "base64",
+			Body:         encodeBody(resp.Body, encryptor),
+			BodyEncoding: bodyEncoding(encryptor),
 			Codec:        resp.Codec,
 		}
 	}
@@ -99,10 +127,15 @@ func toRedisRecord(r *model.IdempotencyRecord) redisRecord {
 	return rr
 }
 
-func fromRedisRecord(rr redisRecord) *model.IdempotencyRecord {
+func fromRedisRecord(rr redisRecord, encryptor BodyEncryptor) *model.IdempotencyRecord {
 	var resp model.CapturedResponse
 	if rr.Response != nil {
-		body, _ := base64.StdEncoding.DecodeString(rr.Response.Body)
+		body, err := decodeBody(rr.Response.Body, encryptor)
+		if err != nil {
+			// If decryption fails (e.g. key rotation, corrupted data),
+			// return an empty body rather than crashing.
+			body = nil
+		}
 		resp = model.CapturedResponse{
 			StatusCode: rr.Response.StatusCode,
 			Headers:    rr.Response.Headers,

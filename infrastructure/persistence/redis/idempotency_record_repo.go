@@ -36,6 +36,8 @@ type IdempotencyRecordRepository struct {
 	keyPrefix string
 	hashTag   string          // Redis Cluster hash tag; empty means no tag
 	breaker   *circuitBreaker // nil when circuit breaker is disabled
+	encryptor BodyEncryptor   // nil means no encryption (plain base64)
+	notifier  *PubSubNotifier // nil means no pub/sub notifications
 }
 
 // RepositoryOption configures the Redis repository.
@@ -113,6 +115,30 @@ func WithBreakerCooldown(d time.Duration) RepositoryOption {
 	}
 }
 
+// WithBodyEncryptor enables AES-GCM encryption for response bodies stored
+// in Redis. When set, bodies are encrypted before base64 encoding during
+// write and decrypted after base64 decoding during read.
+//
+// Without this option, bodies are stored as plain base64 — suitable for
+// non-sensitive data but insufficient for PII or financial information.
+func WithBodyEncryptor(encryptor BodyEncryptor) RepositoryOption {
+	return func(r *IdempotencyRecordRepository) {
+		r.encryptor = encryptor
+	}
+}
+
+// WithPubSubNotifier enables Redis Pub/Sub notifications for state transitions.
+// When set, the repository publishes events on Complete and Abort, allowing
+// waiters to be notified in real-time instead of polling.
+//
+// The application-layer IdempotencyService automatically detects the Notifier
+// port and uses it when available.
+func WithPubSubNotifier(notifier *PubSubNotifier) RepositoryOption {
+	return func(r *IdempotencyRecordRepository) {
+		r.notifier = notifier
+	}
+}
+
 // NewIdempotencyRecordRepository creates a Redis-backed repository.
 // The rds parameter must be a *redis.Redis from go-zero's
 // github.com/zeromicro/go-zero/core/stores/redis package.
@@ -173,7 +199,7 @@ func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *mode
 		return model.BeginDecision{}, err
 	}
 
-	recordJSON, err := marshalRecord(record)
+	recordJSON, err := marshalRecord(record, r.encryptor)
 	if err != nil {
 		r.breakerRecord(err)
 		return model.BeginDecision{}, fmt.Errorf("redis: marshal record: %w", err)
@@ -198,19 +224,19 @@ func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *mode
 	payload := []byte(luaPayload(result))
 	switch luaResult(result) {
 	case luaAcquired:
-		existing, _ := unmarshalRecord(payload)
+		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.Acquired(existing), nil
 	case luaReplay:
-		existing, _ := unmarshalRecord(payload)
+		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.Replay(existing), nil
 	case luaConflict:
-		existing, _ := unmarshalRecord(payload)
+		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.Conflict(existing), nil
 	case luaInProgress:
-		existing, _ := unmarshalRecord(payload)
+		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.InProgress(existing), nil
 	case luaFailed:
-		existing, _ := unmarshalRecord(payload)
+		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.Failed(existing), nil
 	default:
 		return model.BeginDecision{}, fmt.Errorf("redis: unexpected begin result: %s", luaResult(result))
@@ -223,7 +249,7 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 		return err
 	}
 
-	recordJSON, err := marshalRecord(record)
+	recordJSON, err := marshalRecord(record, r.encryptor)
 	if err != nil {
 		r.breakerRecord(err)
 		return fmt.Errorf("redis: marshal record: %w", err)
@@ -320,7 +346,7 @@ func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.
 	}
 	r.breakerRecord(nil)
 
-	record, err := unmarshalRecord([]byte(data))
+	record, err := unmarshalRecord([]byte(data), r.encryptor)
 	if err != nil {
 		return nil, fmt.Errorf("redis: unmarshal record: %w", err)
 	}
