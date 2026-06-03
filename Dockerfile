@@ -26,9 +26,15 @@ RUN go mod download
 # Copy the entire project source
 COPY . .
 
-# Build the example binary with stripped debug info for smaller image
+# Capture build metadata
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_TIME=unknown
+
+# Build the example binary with stripped debug info and version injection
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -trimpath -ldflags="-s -w" \
+    go build -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.BuildTime=${BUILD_TIME}" \
     -o /bin/idempotency-example \
     ./examples/gin/
 

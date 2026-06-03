@@ -17,11 +17,12 @@
 package service
 
 import (
-	"log"
+	"context"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,6 +31,7 @@ import (
 type ConfigWatcher struct {
 	path     string
 	callback func(ConfigFile)
+	logger   port.Logger
 	done     chan struct{}
 	mu       sync.Mutex
 	lastMod  time.Time
@@ -39,7 +41,14 @@ type ConfigWatcher struct {
 // the file is re-read, parsed, and passed to the callback.
 //
 // Returns a ConfigWatcher that must be closed when the application shuts down.
+// Uses the no-op logger; prefer WatchConfigWithLogger for production use.
 func WatchConfig(path string, callback func(ConfigFile)) (*ConfigWatcher, error) {
+	return WatchConfigWithLogger(path, callback, port.NoopLogger())
+}
+
+// WatchConfigWithLogger starts watching the YAML file at path, using the
+// provided Logger for change and error notifications.
+func WatchConfigWithLogger(path string, callback func(ConfigFile), logger port.Logger) (*ConfigWatcher, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
@@ -48,6 +57,7 @@ func WatchConfig(path string, callback func(ConfigFile)) (*ConfigWatcher, error)
 	w := &ConfigWatcher{
 		path:     path,
 		callback: callback,
+		logger:   logger,
 		done:     make(chan struct{}),
 		lastMod:  info.ModTime(),
 	}
@@ -88,7 +98,10 @@ func (w *ConfigWatcher) loop() {
 func (w *ConfigWatcher) checkAndReload() {
 	info, err := os.Stat(w.path)
 	if err != nil {
-		log.Printf("[idempotency] config watch stat error: %v", err)
+		w.logger.Error(context.Background(), "config watch stat error",
+			port.Field{Key: "path", Value: w.path},
+			port.Field{Key: "error", Value: err.Error()},
+		)
 		return
 	}
 
@@ -102,13 +115,19 @@ func (w *ConfigWatcher) checkAndReload() {
 
 	data, err := os.ReadFile(w.path)
 	if err != nil {
-		log.Printf("[idempotency] config watch read error: %v", err)
+		w.logger.Error(context.Background(), "config watch read error",
+			port.Field{Key: "path", Value: w.path},
+			port.Field{Key: "error", Value: err.Error()},
+		)
 		return
 	}
 
 	var cfg ConfigFile
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		log.Printf("[idempotency] config watch parse error: %v", err)
+		w.logger.Error(context.Background(), "config watch parse error",
+			port.Field{Key: "path", Value: w.path},
+			port.Field{Key: "error", Value: err.Error()},
+		)
 		return
 	}
 
@@ -116,6 +135,8 @@ func (w *ConfigWatcher) checkAndReload() {
 	w.lastMod = info.ModTime()
 	w.mu.Unlock()
 
-	log.Printf("[idempotency] config reloaded from %s", w.path)
+	w.logger.Info(context.Background(), "config reloaded",
+		port.Field{Key: "path", Value: w.path},
+	)
 	w.callback(cfg)
 }

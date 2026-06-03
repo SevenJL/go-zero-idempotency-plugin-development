@@ -1,0 +1,56 @@
+# Git
+.git/
+.gitattributes
+.gitignore
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+deploy/
+
+# Tests (not needed in production image)
+tests/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Docker
+.docker/
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies (downloaded during build)
+vendor/
+
+# Build artifacts
+*.exe
+gin
+examples/gin/gin
+examples/gozero-http/gozero-http
+examples/grpc/grpc
+
+# Scripts (not needed in image)
+scripts/
+
+# Helm chart (not needed in image)
+deploy/helm/
+
+# Swagger / Grafana (not needed in image)
+deploy/swagger.json
+deploy/grafana-dashboard.json

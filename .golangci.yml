@@ -1,0 +1,110 @@
+# =============================================================================
+# golangci-lint configuration for the idempotency plugin.
+#
+# Run: golangci-lint run ./...
+# =============================================================================
+
+run:
+  timeout: 5m
+  tests: true
+  modules-download-mode: readonly
+  go: "1.25"
+
+linters:
+  enable:
+    # Default linters
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+
+    # Additional quality linters
+    - bodyclose          # HTTP response body must be closed
+    - contextcheck       # Context usage checks
+    - copyloopvar        # Loop variable aliasing
+    - decorder           # Declaration order
+    - dupword            # Duplicate words
+    - goconst            # Repeated strings that could be constants
+    - gocritic           # Opinionated Go style checks
+    - gofmt              # Formatting
+    - goimports          # Import ordering
+    - gosec              # Security checks
+    - misspell           # Spelling mistakes
+    - nilerr             # nil error returns
+    - nilnil             # nil,nil returns
+    - noctx              # http.Request without context
+    - prealloc           # Slice pre-allocation
+    - revive             # Fast, extensible linter
+    - sqlclosecheck      # sql.Rows/Stmt must be closed
+    - unconvert          # Unnecessary type conversions
+    - unparam            # Unused function parameters
+    - wastedassign       # Wasted assignments
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104  # Errors not checked (audit individually)
+    config:
+      global:
+        audit: true
+
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+      - experimental
+
+  revive:
+    rules:
+      - name: blank-imports
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: dot-imports
+      - name: error-return
+      - name: error-strings
+      - name: error-naming
+      - name: exported
+      - name: indent-error-flow
+      - name: package-comments
+      - name: range
+      - name: receiver-naming
+      - name: time-naming
+      - name: unexported-return
+      - name: unnecessary-stmt
+      - name: unreachable-code
+      - name: unused-parameter
+      - name: var-declaration
+      - name: var-naming
+
+  goconst:
+    min-len: 3
+    min-occurrences: 3
+
+  misspell:
+    locale: US
+
+issues:
+  exclude-rules:
+    # Exclude some linters from test files
+    - path: _test\.go
+      linters:
+        - gosec
+        - goconst
+        - unparam
+        - errcheck
+
+    # Allow unused parameters in interface implementations
+    - path: observability/
+      linters:
+        - unparam
+
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true

@@ -10,6 +10,10 @@
 //
 //	curl http://localhost:8080/health
 //	curl http://localhost:8080/ready
+//
+// Build with version injection:
+//
+//	go build -ldflags "-X main.Version=1.0.0 -X main.Commit=$(git rev-parse --short HEAD) -X main.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" .
 package main
 
 import (
@@ -29,6 +33,13 @@ import (
 	domainservice "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/service"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/infrastructure/persistence/memory"
 	ginidem "github.com/sevenjl/go-zero-idempotency-plugin-development/interfaces/middleware/gin"
+)
+
+// Build information injected via -ldflags.
+var (
+	Version   = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
 )
 
 func main() {
@@ -75,12 +86,22 @@ func main() {
 	pprofGroup.GET("/block", gin.WrapH(pprof.Handler("block")))
 	pprofGroup.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
 
+	// ---- Version endpoint ----
+	r.GET("/version", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"version":    Version,
+			"commit":     Commit,
+			"build_time": BuildTime,
+		})
+	})
+
 	// ---- Health & Readiness endpoints ----
 	// Health: always returns 200 while process is alive.
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-			"time":   time.Now().UTC().Format(time.RFC3339),
+			"status":    "ok",
+			"version":   Version,
+			"time":      time.Now().UTC().Format(time.RFC3339),
 		})
 	})
 
