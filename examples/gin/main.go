@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -61,6 +62,18 @@ func main() {
 	// Serve the test UI
 	r.StaticFile("/", "./static/index.html")
 	r.Static("/static", "./static")
+
+	// ---- Debug/pprof (production profiling) ----
+	pprofGroup := r.Group("/debug/pprof")
+	pprofGroup.GET("/", gin.WrapF(pprof.Index))
+	pprofGroup.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+	pprofGroup.GET("/profile", gin.WrapF(pprof.Profile))
+	pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
+	pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
+	pprofGroup.GET("/heap", gin.WrapH(pprof.Handler("heap")))
+	pprofGroup.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+	pprofGroup.GET("/block", gin.WrapH(pprof.Handler("block")))
+	pprofGroup.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
 
 	// ---- Health & Readiness endpoints ----
 	// Health: always returns 200 while process is alive.

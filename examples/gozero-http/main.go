@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -97,6 +98,18 @@ func main() {
 		Handler: func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		},
+	})
+
+	// Debug/pprof
+	server.AddRoute(rest.Route{
+		Method:  http.MethodGet,
+		Path:    "/debug/pprof/",
+		Handler: pprof.Index,
+	})
+	server.AddRoute(rest.Route{
+		Method:  http.MethodGet,
+		Path:    "/debug/pprof/heap",
+		Handler: pprof.Handler("heap").ServeHTTP,
 	})
 
 	fmt.Println("go-zero HTTP server starting on http://localhost:8888")
