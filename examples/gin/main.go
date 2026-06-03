@@ -5,12 +5,21 @@
 //	go run .
 //
 // Open http://localhost:8080/ to access the test UI.
+//
+// Health & readiness:
+//
+//	curl http://localhost:8080/health
+//	curl http://localhost:8080/ready
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,11 +54,32 @@ func main() {
 	}
 
 	// ---- Set up Gin ----
-	r := gin.Default()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery())
 
 	// Serve the test UI
 	r.StaticFile("/", "./static/index.html")
 	r.Static("/static", "./static")
+
+	// ---- Health & Readiness endpoints ----
+	// Health: always returns 200 while process is alive.
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"time":   time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+
+	// Readiness: verifies that the idempotency service is operational.
+	r.GET("/ready", func(c *gin.Context) {
+		// The memory repository is always ready; for Redis-based deployments
+		// you would add a PING check here.
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ready",
+			"time":   time.Now().UTC().Format(time.RFC3339),
+		})
+	})
 
 	// Apply idempotency middleware globally (only affects POST/PUT/PATCH/DELETE)
 	r.Use(ginidem.Middleware(idemSvc))
@@ -72,9 +102,39 @@ func main() {
 		})
 	})
 
-	fmt.Println("Server starting on http://localhost:8080")
-	fmt.Println("Open http://localhost:8080/ in your browser to test idempotency.")
-	log.Fatal(r.Run(":8080"))
+	// ---- HTTP Server with graceful shutdown ----
+	addr := ":8080"
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Start server in background
+	go func() {
+		fmt.Printf("Server starting on http://localhost%s\n", addr)
+		fmt.Println("Open http://localhost:8080/ in your browser to test idempotency.")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	// ---- Graceful shutdown ----
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+	fmt.Printf("\nReceived signal %v, shutting down gracefully...\n", sig)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	fmt.Println("Server stopped.")
 }
 
 type systemClock struct{}

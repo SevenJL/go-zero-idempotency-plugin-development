@@ -1,9 +1,22 @@
 # Compiled binaries
 /gin
 examples/gin/gin
+*.exe
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

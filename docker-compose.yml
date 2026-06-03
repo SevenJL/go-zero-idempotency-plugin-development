@@ -1,0 +1,66 @@
+# =============================================================================
+# docker-compose.yml — Local development and integration test environment
+#
+# Start all services:
+#   docker compose up -d
+#
+# View logs:
+#   docker compose logs -f app
+#
+# Stop and clean up:
+#   docker compose down -v
+# =============================================================================
+
+services:
+  # ---- Idempotency Plugin Example (Gin) ----
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: idempotency-example
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - idempotency-net
+
+  # ---- Redis (for distributed idempotency storage) ----
+  redis:
+    image: redis:7-alpine
+    container_name: idempotency-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - idempotency-net
+
+volumes:
+  redis-data:
+    driver: local
+
+networks:
+  idempotency-net:
+    driver: bridge
