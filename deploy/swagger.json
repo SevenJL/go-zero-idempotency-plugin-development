@@ -1,0 +1,137 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Idempotency Plugin Example API",
+    "description": "REST API demonstrating the go-zero distributed idempotency plugin with idempotency-key based request deduplication.",
+    "version": "0.2.0",
+    "contact": {
+      "name": "sevenjl",
+      "url": "https://github.com/sevenjl/go-zero-idempotency-plugin-development"
+    }
+  },
+  "servers": [
+    { "url": "http://localhost:8080", "description": "Local development" }
+  ],
+  "tags": [
+    { "name": "Orders", "description": "Idempotency-protected order endpoints" },
+    { "name": "Health", "description": "Health and readiness checks" }
+  ],
+  "paths": {
+    "/api/orders": {
+      "post": {
+        "tags": ["Orders"],
+        "summary": "Create an order",
+        "description": "Creates a new order. Protected by idempotency middleware — clients must supply a unique Idempotency-Key header for each distinct request. Repeating a request with the same key and body returns the cached 201 response without re-executing the handler.",
+        "operationId": "createOrder",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Unique idempotency key (16-128 chars, alphanumeric + . _ : -). When omitted, the request passes through unprotected.",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9._:-]+$",
+              "example": "order-req-01JX000000000001"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sku", "qty"],
+                "properties": {
+                  "sku": { "type": "string", "example": "SKU-12345" },
+                  "qty": { "type": "integer", "minimum": 1, "example": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Order created",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "Present when response comes from idempotency cache",
+                "schema": { "type": "string" }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "order_id": { "type": "string" },
+                    "sku": { "type": "string" },
+                    "qty": { "type": "integer" },
+                    "status": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or key format",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "error": { "type": "string" } } } } }
+          },
+          "409": {
+            "description": "Idempotency key conflict — same key, different body",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "error": { "type": "string" } } } } }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Liveness check",
+        "operationId": "healthCheck",
+        "responses": {
+          "200": {
+            "description": "Service is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" },
+                    "time": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Readiness check",
+        "operationId": "readinessCheck",
+        "responses": {
+          "200": {
+            "description": "Service is ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ready" },
+                    "time": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
