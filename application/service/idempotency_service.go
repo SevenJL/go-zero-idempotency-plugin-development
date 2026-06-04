@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
@@ -82,7 +83,7 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 
 	key, err := s.keyResolver.Resolve(ctx, req)
 	if err != nil {
-		return dto.BeginResult{}, err
+		return dto.BeginResult{}, fmt.Errorf("begin: resolve key: %w", err)
 	}
 	if key.IsZero() {
 		return dto.BeginResult{Type: dto.BeginResultSkipped}, nil
@@ -90,12 +91,12 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 
 	fingerprint, err := s.fingerprinter.Fingerprint(ctx, req)
 	if err != nil {
-		return dto.BeginResult{}, err
+		return dto.BeginResult{}, fmt.Errorf("begin: fingerprint: %w", err)
 	}
 
 	owner, err := s.ownerFactory.NewOwner(ctx)
 	if err != nil {
-		return dto.BeginResult{}, err
+		return dto.BeginResult{}, fmt.Errorf("begin: new owner: %w", err)
 	}
 
 	record, err := model.NewProcessingRecord(model.NewRecordParams{
@@ -108,12 +109,12 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 		ProcessingTTL: s.policy.TTL.ProcessingTTL,
 	})
 	if err != nil {
-		return dto.BeginResult{}, err
+		return dto.BeginResult{}, fmt.Errorf("begin: new record: %w", err)
 	}
 
 	decision, err := s.repo.TryBegin(ctx, record)
 	if err != nil {
-		return dto.BeginResult{}, err
+		return dto.BeginResult{}, fmt.Errorf("begin: try begin: %w", err)
 	}
 	if decision.Type == model.DecisionInProgress && s.policy.ShouldWaitDuplicate() && decision.Record != nil {
 		replay, err := s.WaitReplay(ctx, command.ReplayCommand{
@@ -121,7 +122,7 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 			Deadline: now.Add(s.waitTimeout),
 		})
 		if err != nil {
-			return dto.BeginResult{}, err
+			return dto.BeginResult{}, fmt.Errorf("begin: wait replay: %w", err)
 		}
 		if replay.Found {
 			return beginResultFromReplay(key, fingerprint, owner, replay), nil
@@ -137,11 +138,11 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 				ProcessingTTL: s.policy.TTL.ProcessingTTL,
 			})
 			if err != nil {
-				return dto.BeginResult{}, err
+				return dto.BeginResult{}, fmt.Errorf("begin: new record (retry): %w", err)
 			}
 			decision, err = s.repo.TryBegin(ctx, refreshed)
 			if err != nil {
-				return dto.BeginResult{}, err
+				return dto.BeginResult{}, fmt.Errorf("begin: try begin (retry): %w", err)
 			}
 			return s.toBeginResult(key, fingerprint, owner, decision), nil
 		}
@@ -163,7 +164,7 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 			port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
 			port.Field{Key: "error", Value: err.Error()},
 		)
-		return err
+		return fmt.Errorf("complete: find: %w", err)
 	}
 	if record == nil {
 		return model.ErrInvalidState
@@ -175,14 +176,17 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	// instead of completing. This keeps the domain model clean — the domain
 	// aggregate does not need to know about HTTP status-code conventions.
 	if !s.captureRules.ShouldCache(resp.StatusCode, contentType(resp.Headers), int64(len(resp.Body))) {
-		return s.repo.Abort(ctx, cmd.Key, cmd.Owner, model.FailureModeDelete)
+		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, model.FailureModeDelete); err != nil {
+			return fmt.Errorf("complete: abort (not cacheable): %w", err)
+		}
+		return nil
 	}
 
 	// Strip excluded headers before storing.
 	resp.Headers = s.captureRules.FilterHeaders(resp.Headers)
 
 	if err := record.Complete(cmd.Owner, cmd.Fingerprint, toDomainResponse(resp), now, s.policy.TTL.CompletedTTL); err != nil {
-		return err
+		return fmt.Errorf("complete: %w", err)
 	}
 	if err := s.repo.Commit(ctx, record); err != nil {
 		s.logger.Error(ctx, "idempotency commit failed",
@@ -190,7 +194,7 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 			port.Field{Key: "error", Value: err.Error()},
 		)
 		s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "error"})
-		return err
+		return fmt.Errorf("complete: commit: %w", err)
 	}
 
 	s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "success"})
@@ -203,7 +207,10 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 		mode = model.FailureModeDelete
 	}
 	if mode == model.FailureModeDelete || mode == model.FailureModeKeepProcessingTTL {
-		return s.repo.Abort(ctx, cmd.Key, cmd.Owner, mode)
+		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, mode); err != nil {
+			return fmt.Errorf("abort: %w", err)
+		}
+		return nil
 	}
 
 	now := cmd.Now
@@ -213,15 +220,18 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 
 	record, err := s.repo.Find(ctx, cmd.Key)
 	if err != nil {
-		return err
+		return fmt.Errorf("abort: find: %w", err)
 	}
 	if record == nil {
 		return model.ErrInvalidState
 	}
 	if err := record.MarkFailed(cmd.Owner, cmd.Fingerprint, cmd.ErrorCode, cmd.ErrorMessage, toDomainResponse(cmd.Response), now, s.policy.TTL.FailedTTL); err != nil {
-		return err
+		return fmt.Errorf("abort: mark failed: %w", err)
 	}
-	return s.repo.Commit(ctx, record)
+	if err := s.repo.Commit(ctx, record); err != nil {
+		return fmt.Errorf("abort: commit: %w", err)
+	}
+	return nil
 }
 
 func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayCommand) (dto.ReplayResult, error) {
@@ -233,7 +243,7 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 	// Check initial state
 	record, err := s.repo.Find(ctx, cmd.Key)
 	if err != nil {
-		return dto.ReplayResult{}, err
+		return dto.ReplayResult{}, fmt.Errorf("wait replay: find: %w", err)
 	}
 	if record == nil {
 		return dto.ReplayResult{Found: false, Key: cmd.Key}, nil
@@ -291,13 +301,13 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 		case result := <-notifyCh:
 			return result, nil
 		case <-ctx.Done():
-			return dto.ReplayResult{}, ctx.Err()
+			return dto.ReplayResult{}, fmt.Errorf("wait replay: %w", ctx.Err())
 		default:
 		}
 
 		record, err := s.repo.Find(ctx, cmd.Key)
 		if err != nil {
-			return dto.ReplayResult{}, err
+			return dto.ReplayResult{}, fmt.Errorf("wait replay: poll: %w", err)
 		}
 		if record == nil {
 			return dto.ReplayResult{Found: false, Key: cmd.Key}, nil

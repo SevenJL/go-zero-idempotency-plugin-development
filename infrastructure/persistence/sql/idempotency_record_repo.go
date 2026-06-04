@@ -113,20 +113,35 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 }
 
 func (r *IdempotencyRecordRepository) Abort(ctx context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, mode model.FailureMode) error {
-	scope := valueobject.Scope{} // scope not available here
-	_ = scope
+	// Look up the record to obtain the scope_service for correct targeting.
+	// The unique constraint is on (scope_service, idempotency_key), so we
+	// must scope the DELETE/UPDATE to the correct service.
+	existing, err := r.Find(ctx, key)
+	if err != nil {
+		return fmt.Errorf("sql: abort find: %w", err)
+	}
+	if existing == nil {
+		return nil // record already cleaned up
+	}
+	scopeService := existing.Scope().Service
 
 	switch mode {
 	case model.FailureModeDelete:
 		_, err := r.db.ExecContext(ctx,
-			`DELETE FROM idempotency_records WHERE idempotency_key = ? AND owner = ?`,
-			key.String(), owner.String())
-		return err
+			`DELETE FROM idempotency_records WHERE scope_service = ? AND idempotency_key = ? AND owner = ?`,
+			scopeService, key.String(), owner.String())
+		if err != nil {
+			return fmt.Errorf("sql: abort delete: %w", err)
+		}
+		return nil
 	case model.FailureModeCache:
 		_, err := r.db.ExecContext(ctx,
-			`UPDATE idempotency_records SET status = 'failed', updated_at = NOW(3) WHERE idempotency_key = ? AND owner = ?`,
-			key.String(), owner.String())
-		return err
+			`UPDATE idempotency_records SET status = 'failed', updated_at = NOW(3) WHERE scope_service = ? AND idempotency_key = ? AND owner = ?`,
+			scopeService, key.String(), owner.String())
+		if err != nil {
+			return fmt.Errorf("sql: abort cache: %w", err)
+		}
+		return nil
 	default:
 		return nil
 	}
