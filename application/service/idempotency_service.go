@@ -66,6 +66,20 @@ func NewIdempotencyService(config Config) (*IdempotencyService, error) {
 	}, nil
 }
 
+// Begin initiates an idempotent operation. It resolves the idempotency key
+// from the request headers, computes a fingerprint of the request body, and
+// attempts to acquire exclusive ownership via the repository.
+//
+// Possible outcomes:
+//   - BeginResultSkipped  — service is disabled or no idempotency key present
+//   - BeginResultAcquired — new record created, caller should execute the handler
+//   - BeginResultReplay   — previous completed response available for replay
+//   - BeginResultConflict — same key but different request body (fingerprint mismatch)
+//   - BeginResultInProgress — another caller is already processing this key
+//   - BeginResultFailed   — previous attempt failed, error details available
+//
+// When the duplicate policy is DuplicateWait and a record is in_progress,
+// Begin will block via WaitReplay until the record resolves or times out.
 func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand) (dto.BeginResult, error) {
 	if !s.enabled {
 		return dto.BeginResult{Type: dto.BeginResultSkipped}, nil
@@ -77,8 +91,8 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 	}
 
 	req := cmd.Request
-	if req.Scope.Service == "" {
-		req.Scope.Service = s.scope
+	if req.Scope.Service() == "" {
+		req.Scope = req.Scope.WithService(s.scope)
 	}
 
 	key, err := s.keyResolver.Resolve(ctx, req)
@@ -151,6 +165,18 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 	return s.toBeginResult(key, fingerprint, owner, decision), nil
 }
 
+// Complete finalises a successfully processed idempotent operation. It stores
+// the handler's response so subsequent requests with the same key can replay.
+//
+// Before committing, the capture policy is consulted — if the response status
+// code or content type is not cacheable, the record is aborted (deleted)
+// instead. Excluded headers (e.g. Set-Cookie, Authorization) are stripped
+// from the stored response.
+//
+// Errors:
+//   - ErrInvalidState      — record not found or not in processing state
+//   - ErrOwnerMismatch     — the owner does not match the original Begin caller
+//   - ErrFingerprintConflict — the fingerprint does not match
 func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteCommand) error {
 	now := cmd.Now
 	if now.IsZero() {
@@ -201,6 +227,17 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	return nil
 }
 
+// Abort handles a failed idempotent operation according to the configured
+// failure mode:
+//
+//   - FailureModeDelete: the record is removed, allowing a fresh Begin on retry
+//   - FailureModeCache: the error is stored so subsequent requests can replay
+//     the failure (e.g. for consistent error messages)
+//   - FailureModeKeepProcessingTTL: the record is left as-is; it expires
+//     naturally after the processing TTL
+//
+// When mode is empty, FailureModeDelete is used as the default.
+// For FailureModeCache, the error details are persisted via MarkFailed.
 func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand) error {
 	mode := cmd.Mode
 	if mode == "" {
@@ -234,6 +271,18 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 	return nil
 }
 
+// WaitReplay blocks until the record identified by Key reaches a terminal
+// state (Completed or Failed) or the deadline expires. It uses a dual-path
+// strategy:
+//
+//   - Fast path: subscribes to Redis Pub/Sub notifications (via the Notifier
+//     port) and returns immediately when a state-change event is received.
+//   - Fallback: polls the repository at WaitInterval until the deadline,
+//     then returns Found=false with a copy of the still-processing record.
+//
+// When Found is true, the caller can replay the cached response or error.
+// When Found is false and Record is nil, the previous record expired and
+// the caller should retry TryBegin with a fresh record.
 func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayCommand) (dto.ReplayResult, error) {
 	deadline := cmd.Deadline
 	if deadline.IsZero() {

@@ -44,7 +44,7 @@ func UnaryServerInterceptor(svc *appservice.IdempotencyService, registry port.RP
 		beginResult, err := svc.Begin(ctx, command.BeginCommand{
 			Request: dto.RequestContext{
 				Operation: valueobject.UnsafeOperation(info.FullMethod),
-				Scope:     valueobject.Scope{Tenant: tenant, User: user},
+				Scope:     valueobject.NewScope("", tenant, user),
 				Metadata:  metadataToMap(ctx),
 				Body:      reqBody,
 			},

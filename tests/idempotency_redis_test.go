@@ -104,7 +104,7 @@ func redisBeginReq(t *testing.T, svc *appservice.IdempotencyService, key, body s
 	result, err := svc.Begin(context.Background(), command.BeginCommand{
 		Request: dto.RequestContext{
 			Operation: valueobject.UnsafeOperation("POST /orders"),
-			Scope:     valueobject.Scope{Tenant: "tenant-001", User: "user-001"},
+			Scope:     valueobject.NewScope("", "tenant-001", "user-001"),
 			Headers:   map[string][]string{"Idempotency-Key": {key}},
 			Body:      []byte(body),
 		},
@@ -240,7 +240,7 @@ func TestRedis_ConcurrentBegin(t *testing.T) {
 			result, err := svc.Begin(context.Background(), command.BeginCommand{
 				Request: dto.RequestContext{
 					Operation: valueobject.UnsafeOperation("POST /orders"),
-					Scope:     valueobject.Scope{Tenant: "tenant-001", User: "user-001"},
+					Scope:     valueobject.NewScope("", "tenant-001", "user-001"),
 					Headers:   map[string][]string{"Idempotency-Key": {key}},
 					Body:      []byte(body),
 				},
@@ -294,7 +294,7 @@ func TestRedis_WaitReplay(t *testing.T) {
 		r2, err2 := svc.Begin(context.Background(), command.BeginCommand{
 			Request: dto.RequestContext{
 				Operation: valueobject.UnsafeOperation("POST /orders"),
-				Scope:     valueobject.Scope{Tenant: "tenant-001", User: "user-001"},
+				Scope:     valueobject.NewScope("", "tenant-001", "user-001"),
 				Headers:   map[string][]string{"Idempotency-Key": {key}},
 				Body:      []byte(body),
 			},
@@ -411,7 +411,7 @@ func TestRedis_InvalidKey(t *testing.T) {
 	result, err := svc.Begin(context.Background(), command.BeginCommand{
 		Request: dto.RequestContext{
 			Operation: valueobject.UnsafeOperation("POST /orders"),
-			Scope:     valueobject.Scope{Tenant: "t1", User: "u1"},
+			Scope:     valueobject.NewScope("", "t1", "u1"),
 			Headers:   map[string][]string{"Idempotency-Key": {"ab"}},
 			Body:      []byte(`{"sku":"test"}`),
 		},
@@ -457,7 +457,7 @@ func TestRedis_CircuitBreaker(t *testing.T) {
 		_, err := svc.Begin(context.Background(), command.BeginCommand{
 			Request: dto.RequestContext{
 				Operation: valueobject.UnsafeOperation("POST /orders"),
-				Scope:     valueobject.Scope{Tenant: "t1", User: "u1"},
+				Scope:     valueobject.NewScope("", "t1", "u1"),
 				Headers:   map[string][]string{"Idempotency-Key": {"breaker-001"}},
 				Body:      []byte(`{"sku":"test","qty":1}`),
 			},

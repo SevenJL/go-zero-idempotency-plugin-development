@@ -97,7 +97,7 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 		record.ErrorMessage(),
 		expiresAt,
 		record.Key().String(),
-		record.Scope().Service,
+		record.Scope().Service(),
 		record.Owner().String(),
 		record.Fingerprint().String(),
 		model.StatusProcessing.String(),
@@ -134,7 +134,7 @@ func (r *IdempotencyRecordRepository) Abort(ctx context.Context, key valueobject
 	if existing == nil {
 		return nil // record already cleaned up
 	}
-	scopeService := existing.Scope().Service
+	scopeService := existing.Scope().Service()
 
 	switch mode {
 	case model.FailureModeDelete:
@@ -238,7 +238,7 @@ func (r *IdempotencyRecordRepository) insertRecord(ctx context.Context, record *
 	if r.driver == DriverPostgres {
 		_, err := r.db.ExecContext(ctx, r.insertQuery(),
 			record.Key().String(), record.Fingerprint().String(), record.Owner().String(),
-			record.Operation().String(), record.Scope().Service, record.Scope().Tenant, record.Scope().User,
+			record.Operation().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User(),
 			record.Status().String(), headersJSON, string(resp.Body), resp.Codec,
 			expiresAt, now,
 		)
@@ -287,7 +287,7 @@ func (r *sqlRecord) toDomain() (*model.IdempotencyRecord, error) {
 		Fingerprint:  valueobject.UnsafeFingerprint(r.Fingerprint),
 		Owner:        valueobject.UnsafeOwner(r.Owner),
 		Operation:    valueobject.UnsafeOperation(r.Operation),
-		Scope:        valueobject.Scope{Service: r.ScopeService, Tenant: r.ScopeTenant, User: r.ScopeUser},
+		Scope:        valueobject.NewScope(r.ScopeService, r.ScopeTenant, r.ScopeUser),
 		Status:       model.IdempotencyStatus(r.Status),
 		Response:     resp,
 		ErrorCode:    r.ErrorCode,

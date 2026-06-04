@@ -18,6 +18,12 @@ import (
 //
 // Use NewOTelMetrics() with the meter name, or NewOTelMetricsWithProvider()
 // to supply a custom MeterProvider.
+//
+// Note: the port.Metrics interface does not accept a context.Context parameter,
+// so metric recordings use context.Background(). This means trace context is
+// not propagated to metrics, which limits correlation in distributed tracing
+// dashboards. A future interface revision should add ctx parameters to
+// CounterIncrement and HistogramObserve.
 type OTelMetrics struct {
 	meter metric.Meter
 

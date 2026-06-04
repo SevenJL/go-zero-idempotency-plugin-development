@@ -6,6 +6,14 @@ import (
 
 // Lua scripts that implement the atomic idempotency operations described in
 // the development documentation §8.3.
+//
+// All scripts use cjson.decode() for robust JSON field extraction instead of
+// Lua string.find() pattern matching. cjson is available on Redis ≥ 2.6 when
+// compiled with Lua support (the default for all major Redis distributions).
+// This avoids edge cases where:
+//   - Field values contain escaped quotes (\") that break regex patterns
+//   - Nested JSON objects cause false-positive key matches
+//   - Field ordering differs between serialisation passes
 
 var (
 	beginScript = redis.NewScript(`
@@ -29,30 +37,18 @@ if not existing then
   return {"acquired", record}
 end
 
--- Minimal JSON field extraction without a full parser.
--- We match "fingerprint":"value" with a simple pattern.
-local fpStart, fpEnd = string.find(existing, '"fingerprint"%s*:%s*"([^"]*)"')
-local oldFp = nil
-if fpStart then
-  oldFp = string.sub(existing, fpStart, fpEnd):match('"fingerprint"%s*:%s*"([^"]*)"')
-end
+local cjson = require("cjson")
+local obj   = cjson.decode(existing)
 
-if oldFp and oldFp ~= newFp then
+if obj.fingerprint ~= newFp then
   return {"conflict", existing}
 end
 
--- Extract status
-local stStart, stEnd = string.find(existing, '"status"%s*:%s*"([^"]*)"')
-local status = nil
-if stStart then
-  status = string.sub(existing, stStart, stEnd):match('"status"%s*:%s*"([^"]*)"')
-end
-
-if status == "completed" then
+if obj.status == "completed" then
   return {"replay", existing}
 end
 
-if status == "failed" then
+if obj.status == "failed" then
   return {"failed", existing}
 end
 
@@ -78,34 +74,19 @@ if not existing then
   return {"missing"}
 end
 
--- Extract owner from JSON
-local owStart, owEnd = string.find(existing, '"owner"%s*:%s*"([^"]*)"')
-local oldOwner = nil
-if owStart then
-  oldOwner = string.sub(existing, owStart, owEnd):match('"owner"%s*:%s*"([^"]*)"')
-end
-if oldOwner and oldOwner ~= owner then
+local cjson = require("cjson")
+local obj   = cjson.decode(existing)
+
+if obj.owner ~= owner then
   return {"owner_mismatch"}
 end
 
--- Extract fingerprint from JSON
-local fpStart, fpEnd = string.find(existing, '"fingerprint"%s*:%s*"([^"]*)"')
-local oldFp = nil
-if fpStart then
-  oldFp = string.sub(existing, fpStart, fpEnd):match('"fingerprint"%s*:%s*"([^"]*)"')
-end
-if oldFp and oldFp ~= fp then
+if obj.fingerprint ~= fp then
   return {"conflict"}
 end
 
--- Extract status
-local stStart, stEnd = string.find(existing, '"status"%s*:%s*"([^"]*)"')
-local status = nil
-if stStart then
-  status = string.sub(existing, stStart, stEnd):match('"status"%s*:%s*"([^"]*)"')
-end
-if status ~= "processing" then
-  return {"invalid_state", status or "unknown"}
+if obj.status ~= "processing" then
+  return {"invalid_state", obj.status or "unknown"}
 end
 
 redis.call("SETEX", key, ttl, record)
@@ -129,24 +110,15 @@ if not existing then
   return {"ok"}
 end
 
--- Extract owner
-local owStart, owEnd = string.find(existing, '"owner"%s*:%s*"([^"]*)"')
-local oldOwner = nil
-if owStart then
-  oldOwner = string.sub(existing, owStart, owEnd):match('"owner"%s*:%s*"([^"]*)"')
-end
-if oldOwner and oldOwner ~= owner then
+local cjson = require("cjson")
+local obj   = cjson.decode(existing)
+
+if obj.owner ~= owner then
   return {"owner_mismatch"}
 end
 
--- Extract status
-local stStart, stEnd = string.find(existing, '"status"%s*:%s*"([^"]*)"')
-local status = nil
-if stStart then
-  status = string.sub(existing, stStart, stEnd):match('"status"%s*:%s*"([^"]*)"')
-end
-if status ~= "processing" then
-  return {"invalid_state", status or "unknown"}
+if obj.status ~= "processing" then
+  return {"invalid_state", obj.status or "unknown"}
 end
 
 if mode == "delete" then
@@ -186,23 +158,14 @@ if not existing then
   return {"missing"}
 end
 
--- Extract owner
-local owStart, owEnd = string.find(existing, '"owner"%s*:%s*"([^"]*)"')
-local oldOwner = nil
-if owStart then
-  oldOwner = string.sub(existing, owStart, owEnd):match('"owner"%s*:%s*"([^"]*)"')
-end
-if oldOwner and oldOwner ~= owner then
+local cjson = require("cjson")
+local obj   = cjson.decode(existing)
+
+if obj.owner ~= owner then
   return {"owner_mismatch"}
 end
 
--- Extract status
-local stStart, stEnd = string.find(existing, '"status"%s*:%s*"([^"]*)"')
-local status = nil
-if stStart then
-  status = string.sub(existing, stStart, stEnd):match('"status"%s*:%s*"([^"]*)"')
-end
-if status ~= "processing" then
+if obj.status ~= "processing" then
   return {"ok"} -- not an error; just nothing to renew
 end
 

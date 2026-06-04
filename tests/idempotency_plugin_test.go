@@ -88,7 +88,7 @@ func beginReqWithTenant(t *testing.T, svc *appservice.IdempotencyService, key, b
 	result, err := svc.Begin(context.Background(), command.BeginCommand{
 		Request: dto.RequestContext{
 			Operation: valueobject.UnsafeOperation("POST /orders"),
-			Scope:     valueobject.Scope{Tenant: tenant, User: user},
+			Scope:     valueobject.NewScope("", tenant, user),
 			Headers:   map[string][]string{"Idempotency-Key": {key}},
 			Body:      []byte(body),
 		},
@@ -280,7 +280,7 @@ func TestWaitPolicyReplaysAfterComplete(t *testing.T) {
 	r2, err := svc.Begin(context.Background(), command.BeginCommand{
 		Request: dto.RequestContext{
 			Operation: valueobject.UnsafeOperation("POST /orders"),
-			Scope:     valueobject.Scope{Tenant: "tenant-001", User: "user-001"},
+			Scope:     valueobject.NewScope("", "tenant-001", "user-001"),
 			Headers:   map[string][]string{"Idempotency-Key": {"key-006-ABCDEFGHI"}},
 			Body:      []byte(`{"sku":"A"}`),
 		},
@@ -545,7 +545,7 @@ func TestConcurrentBeginsOnlyOneAcquires(t *testing.T) {
 			r, err := svc.Begin(context.Background(), command.BeginCommand{
 				Request: dto.RequestContext{
 					Operation: valueobject.UnsafeOperation("POST /orders"),
-					Scope:     valueobject.Scope{Tenant: "tenant-001"},
+					Scope:     valueobject.NewScope("", "tenant-001", ""),
 					Headers:   map[string][]string{"Idempotency-Key": {"key-concurrent-001"}},
 					Body:      []byte(`{"sku":"A"}`),
 				},
@@ -734,7 +734,7 @@ func TestZeroNowUsesClock(t *testing.T) {
 		// Now is zero value
 		Request: dto.RequestContext{
 			Operation: valueobject.UnsafeOperation("POST /orders"),
-			Scope:     valueobject.Scope{Tenant: "tenant-001"},
+			Scope:     valueobject.NewScope("", "tenant-001", ""),
 			Headers:   map[string][]string{"Idempotency-Key": {"key-023-abcdefgh"}},
 			Body:      []byte(`{"sku":"A"}`),
 		},

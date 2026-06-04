@@ -47,8 +47,10 @@ func NewProcessingRecord(params NewRecordParams) (*IdempotencyRecord, error) {
 	if params.ProcessingTTL <= 0 {
 		return nil, ErrInvalidTTL
 	}
-	if params.Now.IsZero() {
-		params.Now = time.Now().UTC()
+
+	now := params.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
 
 	return &IdempotencyRecord{
@@ -58,9 +60,9 @@ func NewProcessingRecord(params NewRecordParams) (*IdempotencyRecord, error) {
 		operation:   params.Operation,
 		scope:       params.Scope,
 		status:      StatusProcessing,
-		createdAt:   params.Now,
-		updatedAt:   params.Now,
-		expiresAt:   params.Now.Add(params.ProcessingTTL),
+		createdAt:   now,
+		updatedAt:   now,
+		expiresAt:   now.Add(params.ProcessingTTL),
 	}, nil
 }
 

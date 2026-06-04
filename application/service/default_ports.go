@@ -46,9 +46,9 @@ type SHA256Fingerprinter struct{}
 
 func (SHA256Fingerprinter) Fingerprint(_ context.Context, request dto.RequestContext) (valueobject.Fingerprint, error) {
 	parts := []string{
-		request.Scope.Service,
-		request.Scope.Tenant,
-		request.Scope.User,
+		request.Scope.Service(),
+		request.Scope.Tenant(),
+		request.Scope.User(),
 		request.Operation.String(),
 		string(canonicalBody(request.Body)),
 	}

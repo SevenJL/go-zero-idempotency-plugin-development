@@ -79,11 +79,9 @@ func (r CaptureRules) ShouldCache(statusCode int, contentType string, bodySize i
 }
 
 // FilterHeaders returns a copy of headers with excluded headers removed.
+// Always returns a new map to prevent callers from accidentally mutating
+// the original data through the returned reference.
 func (r CaptureRules) FilterHeaders(headers map[string][]string) map[string][]string {
-	if len(headers) == 0 || len(r.ExcludedHeaders) == 0 {
-		return headers
-	}
-
 	excluded := make(map[string]struct{}, len(r.ExcludedHeaders))
 	for _, h := range r.ExcludedHeaders {
 		excluded[toLower(h)] = struct{}{}
@@ -92,7 +90,9 @@ func (r CaptureRules) FilterHeaders(headers map[string][]string) map[string][]st
 	filtered := make(map[string][]string, len(headers))
 	for name, values := range headers {
 		if _, skip := excluded[toLower(name)]; !skip {
-			filtered[name] = values
+			copied := make([]string, len(values))
+			copy(copied, values)
+			filtered[name] = copied
 		}
 	}
 	return filtered

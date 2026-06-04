@@ -24,6 +24,11 @@ const (
 //	closed   — normal operation, all requests go through
 //	open     — consecutive failures exceeded threshold, requests are rejected
 //	halfOpen — cooldown period elapsed, one trial request is allowed
+//
+// Concurrency: the breaker uses atomic operations for state transitions.
+// In half-open state, a trialActive flag ensures only a single trial
+// request is admitted — preventing the thundering-herd problem where
+// multiple goroutines race through the half-open gate.
 type circuitBreaker struct {
 	mu           sync.RWMutex
 	mode         storageFailureMode
@@ -32,6 +37,7 @@ type circuitBreaker struct {
 	failureCount atomic.Int64
 	lastFailure  atomic.Int64 // unix nano
 	state        atomic.Int32 // 0=closed, 1=open, 2=halfOpen
+	trialActive  atomic.Bool  // true when a trial is in-flight during halfOpen
 }
 
 const (
@@ -87,20 +93,27 @@ func (cb *circuitBreaker) allow() bool {
 		return false
 	}
 
-	// Half-open: allow exactly one request. The caller MUST call
-	// recordSuccess or recordFailure to move back to closed or open.
+	// Half-open: allow exactly one trial request via CAS on trialActive.
+	// This prevents multiple goroutines from racing through the gate and
+	// ensures only the designated trial request determines the next state.
+	if !cb.trialActive.CompareAndSwap(false, true) {
+		return false
+	}
 	return true
 }
 
 // recordSuccess resets the breaker to the closed state.
 func (cb *circuitBreaker) recordSuccess() {
 	cb.failureCount.Store(0)
+	cb.trialActive.Store(false)
 	cb.state.Store(cbStateClosed)
 }
 
 // recordFailure increments the failure count. If the threshold is reached the
-// breaker transitions to the open state.
+// breaker transitions to the open state. The trial-active flag is cleared so
+// the next cooldown cycle can admit a new trial.
 func (cb *circuitBreaker) recordFailure() {
+	cb.trialActive.Store(false)
 	count := cb.failureCount.Add(1)
 	cb.lastFailure.Store(time.Now().UnixNano())
 
