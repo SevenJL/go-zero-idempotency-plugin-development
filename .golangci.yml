@@ -1,8 +1,10 @@
 # =============================================================================
-# golangci-lint configuration for the idempotency plugin.
+# golangci-lint v2 configuration for the idempotency plugin.
 #
 # Run: golangci-lint run ./...
 # =============================================================================
+
+version: "2"
 
 run:
   timeout: 5m
@@ -28,8 +30,6 @@ linters:
     - dupword            # Duplicate words
     - goconst            # Repeated strings that could be constants
     - gocritic           # Opinionated Go style checks
-    - gofmt              # Formatting
-    - goimports          # Import ordering
     - gosec              # Security checks
     - misspell           # Spelling mistakes
     - nilerr             # nil error returns
@@ -41,6 +41,11 @@ linters:
     - unconvert          # Unnecessary type conversions
     - unparam            # Unused function parameters
     - wastedassign       # Wasted assignments
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
 
 linters-settings:
   gosec:
@@ -105,6 +110,7 @@ issues:
   max-same-issues: 0
 
 output:
-  formats:
-    - format: colored-line-number
   sort-results: true
+  formats:
+    text:
+      format: colored-line-number
