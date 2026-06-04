@@ -107,6 +107,17 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
+		// RowsAffected may be 0 when the row matched but had identical
+		// values (a MySQL driver optimisation). Verify by re-reading —
+		// if the record exists with the expected status, the commit is
+		// effectively a no-op (idempotent retry) and is not an error.
+		existing, findErr := r.Find(ctx, record.Key())
+		if findErr != nil || existing == nil {
+			return model.ErrOwnerMismatch
+		}
+		if existing.Status() == record.Status() && existing.Owner().Equals(record.Owner()) {
+			return nil
+		}
 		return model.ErrOwnerMismatch
 	}
 	return nil
@@ -175,7 +186,7 @@ func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.
 	}
 
 	rec.RespHeaders = headersStr
-	return rec.toDomain(), nil
+	return rec.toDomain()
 }
 
 func (r *IdempotencyRecordRepository) Renew(ctx context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, ttl time.Duration) error {
@@ -258,10 +269,12 @@ type sqlRecord struct {
 	CreatedAt, UpdatedAt, ExpiresAt                      time.Time
 }
 
-func (r *sqlRecord) toDomain() *model.IdempotencyRecord {
+func (r *sqlRecord) toDomain() (*model.IdempotencyRecord, error) {
 	var headers map[string][]string
 	if r.RespHeaders != "" {
-		json.Unmarshal([]byte(r.RespHeaders), &headers)
+		if err := json.Unmarshal([]byte(r.RespHeaders), &headers); err != nil {
+			return nil, fmt.Errorf("sql: unmarshal resp_headers: %w", err)
+		}
 	}
 	resp := model.CapturedResponse{
 		StatusCode: r.StatusCode,
@@ -282,5 +295,5 @@ func (r *sqlRecord) toDomain() *model.IdempotencyRecord {
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
 		ExpiresAt:    r.ExpiresAt,
-	})
+	}), nil
 }

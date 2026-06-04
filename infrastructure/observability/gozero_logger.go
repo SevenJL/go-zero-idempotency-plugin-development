@@ -29,8 +29,11 @@ func (l *GoZeroLogger) Error(ctx context.Context, msg string, fields ...port.Fie
 }
 
 func (l *GoZeroLogger) Warn(ctx context.Context, msg string, fields ...port.Field) {
+	// go-zero does not have a native WARN level. We emit through Errorw
+	// with an explicit level tag so operators can filter in log aggregation.
+	fields = append(fields, port.Field{Key: "level", Value: "warn"})
 	ctx = logx.WithFields(ctx, toLogxFields(fields)...)
-	logx.WithContext(ctx).Sloww(msg)
+	logx.WithContext(ctx).Errorw(msg)
 }
 
 func toLogxFields(fields []port.Field) []logx.LogField {

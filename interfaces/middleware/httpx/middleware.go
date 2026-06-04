@@ -107,11 +107,10 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 				}
 
 				crw := newCaptureResponseWriter(w)
-				next.ServeHTTP(crw, r.WithContext(ctx))
-
 				if hb != nil {
-					hb.Stop()
+					defer hb.Stop()
 				}
+				next.ServeHTTP(crw, r.WithContext(ctx))
 
 				resp := crw.CapturedResponse()
 				_ = svc.Complete(ctx, command.CompleteCommand{

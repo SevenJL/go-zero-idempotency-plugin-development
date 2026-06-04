@@ -89,17 +89,22 @@ func (n *PubSubNotifier) Wait(ctx context.Context, channel string) (string, erro
 }
 
 // Close unsubscribes all active subscriptions. Call during graceful shutdown.
+// All subscriptions are closed even if some produce errors — the first error
+// encountered is returned after all close attempts complete.
 func (n *PubSubNotifier) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
+	var firstErr error
 	for channel, pubsub := range n.pubsubs {
 		if err := pubsub.Close(); err != nil {
-			return fmt.Errorf("redis: close pubsub %s: %w", channel, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("redis: close pubsub %s: %w", channel, err)
+			}
 		}
 	}
 	n.pubsubs = make(map[string]*goredis.PubSub)
-	return nil
+	return firstErr
 }
 
 // ChannelFor returns the Redis Pub/Sub channel name for a given key.
