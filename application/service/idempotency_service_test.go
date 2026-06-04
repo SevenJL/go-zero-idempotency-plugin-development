@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,14 +17,19 @@ import (
 )
 
 type fixedClock struct {
+	mu  sync.Mutex
 	now time.Time
 }
 
 func (c *fixedClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.now
 }
 
 func (c *fixedClock) Sleep(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
 }
 
