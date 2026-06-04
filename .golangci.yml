@@ -42,75 +42,78 @@ linters:
     - unparam            # Unused function parameters
     - wastedassign       # Wasted assignments
 
+  settings:
+    gosec:
+      excludes:
+        - G104  # Errors not checked (audit individually)
+      config:
+        global:
+          audit: true
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+        - experimental
+
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: unnecessary-stmt
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+    misspell:
+      locale: US
+
+  exclusions:
+    rules:
+      # Exclude some linters from test files
+      - path: _test\.go
+        linters:
+          - gosec
+          - goconst
+          - unparam
+          - errcheck
+
+      # Allow unused parameters in interface implementations
+      - path: observability/
+        linters:
+          - unparam
+
 formatters:
   enable:
     - gofmt
     - goimports
 
-linters-settings:
-  gosec:
-    excludes:
-      - G104  # Errors not checked (audit individually)
-    config:
-      global:
-        audit: true
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-      - experimental
-
-  revive:
-    rules:
-      - name: blank-imports
-      - name: context-as-argument
-      - name: context-keys-type
-      - name: dot-imports
-      - name: error-return
-      - name: error-strings
-      - name: error-naming
-      - name: exported
-      - name: indent-error-flow
-      - name: package-comments
-      - name: range
-      - name: receiver-naming
-      - name: time-naming
-      - name: unexported-return
-      - name: unnecessary-stmt
-      - name: unreachable-code
-      - name: unused-parameter
-      - name: var-declaration
-      - name: var-naming
-
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
-  misspell:
-    locale: US
-
 issues:
-  exclude-rules:
-    # Exclude some linters from test files
-    - path: _test\.go
-      linters:
-        - gosec
-        - goconst
-        - unparam
-        - errcheck
-
-    # Allow unused parameters in interface implementations
-    - path: observability/
-      linters:
-        - unparam
-
   max-issues-per-linter: 0
   max-same-issues: 0
 
 output:
-  sort-results: true
+  sort-order:
+    - file
   formats:
     text:
-      format: colored-line-number
+      path: stdout
+      colors: true
