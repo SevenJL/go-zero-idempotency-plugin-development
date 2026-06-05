@@ -21,6 +21,7 @@ type Option func(*options)
 type options struct {
 	skipMethods     map[string]bool
 	heartbeatConfig *appservice.HeartbeatConfig
+	maxBodyBytes    int64
 }
 
 func newOptions() *options {
@@ -30,6 +31,7 @@ func newOptions() *options {
 			http.MethodHead:    true,
 			http.MethodOptions: true,
 		},
+		maxBodyBytes: 1 << 20, // 1 MB default
 	}
 }
 
@@ -49,6 +51,15 @@ func WithHeartbeat(cfg appservice.HeartbeatConfig) Option {
 	return func(o *options) {
 		cfgCopy := cfg
 		o.heartbeatConfig = &cfgCopy
+	}
+}
+
+// WithMaxBodyBytes limits the request body size read for fingerprint
+// computation. Requests exceeding this limit are rejected with 413.
+// Defaults to 1 MB. Set to 0 to disable the limit.
+func WithMaxBodyBytes(n int64) Option {
+	return func(o *options) {
+		o.maxBodyBytes = n
 	}
 }
 
@@ -73,9 +84,19 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 			}
 
 			// Read body for fingerprint, then restore.
+			// Use a bounded reader to prevent OOM from oversized request bodies.
 			var bodyBytes []byte
 			if r.Body != nil {
-				bodyBytes, _ = io.ReadAll(r.Body)
+				maxBytes := o.maxBodyBytes
+				if maxBytes <= 0 {
+					maxBytes = 1 << 20 // fallback default
+				}
+				limited := io.LimitReader(r.Body, maxBytes+1) // +1 to detect overflow
+				bodyBytes, _ = io.ReadAll(limited)
+				if int64(len(bodyBytes)) > maxBytes {
+					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			}
 

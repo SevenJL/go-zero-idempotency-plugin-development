@@ -203,6 +203,10 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	// aggregate does not need to know about HTTP status-code conventions.
 	if !s.captureRules.ShouldCache(resp.StatusCode, contentType(resp.Headers), int64(len(resp.Body))) {
 		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, model.FailureModeDelete); err != nil {
+			s.logger.Error(ctx, "idempotency abort (not cacheable) failed",
+				port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
+				port.Field{Key: "error", Value: err.Error()},
+			)
 			return fmt.Errorf("complete: abort (not cacheable): %w", err)
 		}
 		return nil
@@ -219,11 +223,11 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 			port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
 			port.Field{Key: "error", Value: err.Error()},
 		)
-		s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "error"})
+		s.metrics.CounterIncrementContext(ctx, "idempotency_commit_total", map[string]string{"result": "error"})
 		return fmt.Errorf("complete: commit: %w", err)
 	}
 
-	s.metrics.CounterIncrement("idempotency_commit_total", map[string]string{"result": "success"})
+	s.metrics.CounterIncrementContext(ctx, "idempotency_commit_total", map[string]string{"result": "success"})
 	return nil
 }
 
@@ -245,6 +249,10 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 	}
 	if mode == model.FailureModeDelete || mode == model.FailureModeKeepProcessingTTL {
 		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, mode); err != nil {
+			s.logger.Error(ctx, "idempotency abort failed",
+				port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
+				port.Field{Key: "error", Value: err.Error()},
+			)
 			return fmt.Errorf("abort: %w", err)
 		}
 		return nil

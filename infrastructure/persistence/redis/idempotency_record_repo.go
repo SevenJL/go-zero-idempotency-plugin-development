@@ -337,7 +337,7 @@ func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.
 	data, err := r.client.GetCtx(ctx, storeKey)
 	if err != nil {
 		// goredis.Nil means the key simply does not exist — not a storage error.
-		if err == goredis.Nil {
+		if errors.Is(err, goredis.Nil) {
 			r.breakerRecord(nil)
 			return nil, nil
 		}

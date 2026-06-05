@@ -26,7 +26,23 @@ import (
 //	s := grpc.NewServer(
 //	    grpc.UnaryInterceptor(grpcidem.UnaryServerInterceptor(idemSvc, codecRegistry)),
 //	)
+//
+// To enable heartbeat (TTL renewal for long-running handlers), use
+// UnaryServerInterceptorWithHeartbeat instead.
 func UnaryServerInterceptor(svc *appservice.IdempotencyService, registry port.RPCCodecRegistry) grpc.UnaryServerInterceptor {
+	return UnaryServerInterceptorWithHeartbeat(svc, registry, nil)
+}
+
+// UnaryServerInterceptorWithHeartbeat returns a gRPC UnaryServerInterceptor
+// with optional heartbeat support. When hbCfg is non-nil, the interceptor
+// starts a heartbeat for long-running handlers to prevent the idempotency
+// record from expiring before the handler completes.
+//
+// Usage:
+//
+//	hbCfg := appservice.HeartbeatConfig{Repo: repo, TTL: 30 * time.Second}
+//	interceptor := grpcidem.UnaryServerInterceptorWithHeartbeat(idemSvc, registry, &hbCfg)
+func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, registry port.RPCCodecRegistry, hbCfg *appservice.HeartbeatConfig) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		// Skip if no key is provided — idempotency is opt-in at the client.
 		idemKey := extractFromMetadata(ctx, "idempotency-key")
@@ -58,19 +74,35 @@ func UnaryServerInterceptor(svc *appservice.IdempotencyService, registry port.RP
 			return handler(ctx, req)
 
 		case dto.BeginResultAcquired:
+			// Start heartbeat for long-running handlers.
+			var hb *appservice.Heartbeat
+			if hbCfg != nil {
+				cfg := *hbCfg
+				cfg.Key = beginResult.Key
+				cfg.Owner = beginResult.Owner
+				hb = appservice.NewHeartbeat(cfg)
+				ctx = hb.Start(ctx)
+			}
+
 			resp, handlerErr := handler(ctx, req)
 
+			// Stop heartbeat before finalising the record.
+			if hb != nil {
+				hb.Stop()
+			}
+
 			if handlerErr != nil {
-				// Business handler failed — abort. For gRPC we use delete mode
-				// so the client can retry with a fresh key. The application layer
-				// handles the mode setting via its own defaults.
-				_ = svc.Abort(ctx, command.AbortCommand{
+				// Business handler failed — abort.
+				if err := svc.Abort(ctx, command.AbortCommand{
 					Key:          beginResult.Key,
 					Fingerprint:  beginResult.Fingerprint,
 					Owner:        beginResult.Owner,
 					ErrorCode:    status.Code(handlerErr).String(),
 					ErrorMessage: handlerErr.Error(),
-				})
+				}); err != nil {
+					// Log but don't return — the handler error takes precedence.
+					// The service layer already logs internally.
+				}
 				return resp, handlerErr
 			}
 
@@ -78,7 +110,7 @@ func UnaryServerInterceptor(svc *appservice.IdempotencyService, registry port.RP
 			codec := lookupCodec(registry, info.FullMethod)
 			respBody, _ := codec.Marshal(resp)
 
-			_ = svc.Complete(ctx, command.CompleteCommand{
+			if err := svc.Complete(ctx, command.CompleteCommand{
 				Key:         beginResult.Key,
 				Fingerprint: beginResult.Fingerprint,
 				Owner:       beginResult.Owner,
@@ -86,7 +118,10 @@ func UnaryServerInterceptor(svc *appservice.IdempotencyService, registry port.RP
 					Codec: codec.ContentType(),
 					Body:  respBody,
 				},
-			})
+			}); err != nil {
+				// Best-effort: the handler already succeeded. Logging happens
+				// inside the service layer.
+			}
 			return resp, nil
 
 		case dto.BeginResultReplay:
@@ -148,13 +183,15 @@ func replayRPCResponse(ctx context.Context, registry port.RPCCodecRegistry, full
 	}
 
 	if !registered || factory == nil {
-		// No factory registered — return the raw body.
-		// The caller is expected to register types for replay to work correctly.
-		var resp any
-		if len(result.Response.Body) > 0 {
-			_ = json.Unmarshal(result.Response.Body, &resp)
-		}
-		return resp, nil
+		// No codec registered for this method — replay cannot produce a
+		// correctly typed response message. The stored body is available
+		// but the gRPC framework requires a concrete proto message.
+		// Register a codec and factory via RPCCodecRegistry.Register:
+		//
+		//   registry.Register("/package.Service/Method", protobufCodec,
+		//       func() any { return &pb.Response{} })
+		return nil, status.Error(codes.FailedPrecondition,
+			"idempotency: no codec registered for replay; register a codec factory for this RPC method")
 	}
 
 	resp := factory()

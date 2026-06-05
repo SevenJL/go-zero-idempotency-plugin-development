@@ -1,6 +1,8 @@
 package observability
 
 import (
+	"context"
+
 	"github.com/zeromicro/go-zero/core/metric"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
@@ -79,6 +81,14 @@ func NewGoZeroMetrics() *GoZeroMetrics {
 }
 
 func (m *GoZeroMetrics) CounterIncrement(name string, labels map[string]string) {
+	m.CounterIncrementContext(context.Background(), name, labels)
+}
+
+func (m *GoZeroMetrics) HistogramObserve(name string, value float64, labels map[string]string) {
+	m.HistogramObserveContext(context.Background(), name, value, labels)
+}
+
+func (m *GoZeroMetrics) CounterIncrementContext(_ context.Context, name string, labels map[string]string) {
 	cd, ok := m.counters[name]
 	if !ok {
 		return
@@ -87,7 +97,7 @@ func (m *GoZeroMetrics) CounterIncrement(name string, labels map[string]string) 
 	cd.vec.Inc(args...)
 }
 
-func (m *GoZeroMetrics) HistogramObserve(name string, value float64, labels map[string]string) {
+func (m *GoZeroMetrics) HistogramObserveContext(_ context.Context, name string, value float64, labels map[string]string) {
 	hd, ok := m.histograms[name]
 	if !ok {
 		return

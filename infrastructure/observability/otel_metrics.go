@@ -50,21 +50,35 @@ func NewOTelMetricsWithProvider(provider metric.MeterProvider, meterName string)
 }
 
 // CounterIncrement increments the named counter by 1.
+// Deprecated: use CounterIncrementContext to propagate trace context.
 func (m *OTelMetrics) CounterIncrement(name string, labels map[string]string) {
+	m.CounterIncrementContext(context.Background(), name, labels)
+}
+
+// HistogramObserve records a value on the named histogram.
+// Deprecated: use HistogramObserveContext to propagate trace context.
+func (m *OTelMetrics) HistogramObserve(name string, value float64, labels map[string]string) {
+	m.HistogramObserveContext(context.Background(), name, value, labels)
+}
+
+// CounterIncrementContext increments the named counter by 1, propagating
+// trace context for metric-to-trace correlation.
+func (m *OTelMetrics) CounterIncrementContext(ctx context.Context, name string, labels map[string]string) {
 	c, err := m.getOrCreateCounter(name)
 	if err != nil {
 		return
 	}
-	c.Add(context.Background(), 1, metric.WithAttributes(mapToAttrs(labels)...))
+	c.Add(ctx, 1, metric.WithAttributes(mapToAttrs(labels)...))
 }
 
-// HistogramObserve records a value on the named histogram.
-func (m *OTelMetrics) HistogramObserve(name string, value float64, labels map[string]string) {
+// HistogramObserveContext records a value on the named histogram, propagating
+// trace context for metric-to-trace correlation.
+func (m *OTelMetrics) HistogramObserveContext(ctx context.Context, name string, value float64, labels map[string]string) {
 	h, err := m.getOrCreateHistogram(name)
 	if err != nil {
 		return
 	}
-	h.Record(context.Background(), value, metric.WithAttributes(mapToAttrs(labels)...))
+	h.Record(ctx, value, metric.WithAttributes(mapToAttrs(labels)...))
 }
 
 func (m *OTelMetrics) getOrCreateCounter(name string) (metric.Int64Counter, error) {

@@ -20,9 +20,27 @@ type Field struct {
 // Metrics is a metrics port for counters and histograms.
 // Metric names follow the idempotency_* convention defined in the
 // development documentation.
+//
+// Context-aware variants (CounterIncrementContext, HistogramObserveContext)
+// propagate trace context to metrics for exemplar support. The legacy
+// no-context methods call the context variants with context.Background()
+// and remain for backward compatibility.
 type Metrics interface {
+	// CounterIncrement increments the named counter by 1.
+	// Deprecated: prefer CounterIncrementContext to propagate trace context.
 	CounterIncrement(name string, labels map[string]string)
+
+	// HistogramObserve records a value on the named histogram.
+	// Deprecated: prefer HistogramObserveContext to propagate trace context.
 	HistogramObserve(name string, value float64, labels map[string]string)
+
+	// CounterIncrementContext increments the named counter by 1, propagating
+	// trace context for metric-to-trace correlation (exemplar support).
+	CounterIncrementContext(ctx context.Context, name string, labels map[string]string)
+
+	// HistogramObserveContext records a value on the named histogram,
+	// propagating trace context for metric-to-trace correlation.
+	HistogramObserveContext(ctx context.Context, name string, value float64, labels map[string]string)
 }
 
 // Tracer is a distributed tracing port.
@@ -55,8 +73,10 @@ func (noopLogger) Warn(_ context.Context, _ string, _ ...Field)  {}
 
 type noopMetrics struct{}
 
-func (noopMetrics) CounterIncrement(_ string, _ map[string]string)            {}
-func (noopMetrics) HistogramObserve(_ string, _ float64, _ map[string]string) {}
+func (noopMetrics) CounterIncrement(_ string, _ map[string]string)                             {}
+func (noopMetrics) HistogramObserve(_ string, _ float64, _ map[string]string)                  {}
+func (noopMetrics) CounterIncrementContext(_ context.Context, _ string, _ map[string]string)    {}
+func (noopMetrics) HistogramObserveContext(_ context.Context, _ string, _ float64, _ map[string]string) {}
 
 type noopTracer struct{}
 

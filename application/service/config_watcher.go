@@ -62,6 +62,10 @@ func WatchConfigWithLogger(path string, callback func(ConfigFile), logger port.L
 		lastMod:  info.ModTime(),
 	}
 
+	// Perform an initial load so the callback receives the current config
+	// immediately, without waiting for the first poll tick.
+	w.checkAndReload()
+
 	go w.loop()
 	return w, nil
 }

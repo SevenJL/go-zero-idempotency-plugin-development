@@ -13,6 +13,10 @@
 //	repo := sqlrepo.NewIdempotencyRecordRepository(db, sqlrepo.DriverPostgres)
 //
 // The repository requires the schema defined in schema.sql to be applied first.
+//
+// Expired record cleanup runs in a background goroutine at a configurable
+// interval (default: 60s). Call Close() to stop the cleanup goroutine during
+// graceful shutdown.
 package sql
 
 import (
@@ -20,6 +24,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
@@ -39,20 +44,65 @@ const (
 type IdempotencyRecordRepository struct {
 	db     *sql.DB
 	driver Driver
+
+	cleanupInterval time.Duration
+	cleanupDone     chan struct{}
+	cleanupOnce     sync.Once
 }
 
 // NewIdempotencyRecordRepository creates a SQL-backed repository.
+// Expired records are cleaned up every 60s in a background goroutine.
+// Use NewIdempotencyRecordRepositoryWithCleanup to customise the interval.
 func NewIdempotencyRecordRepository(db *sql.DB, driver Driver) *IdempotencyRecordRepository {
-	return &IdempotencyRecordRepository{db: db, driver: driver}
+	return NewIdempotencyRecordRepositoryWithCleanup(db, driver, 60*time.Second)
+}
+
+// NewIdempotencyRecordRepositoryWithCleanup creates a SQL-backed repository
+// with a custom cleanup interval. Set interval to 0 to disable background
+// cleanup (caller is then responsible for periodic expired-record cleanup).
+func NewIdempotencyRecordRepositoryWithCleanup(db *sql.DB, driver Driver, interval time.Duration) *IdempotencyRecordRepository {
+	r := &IdempotencyRecordRepository{
+		db:              db,
+		driver:          driver,
+		cleanupInterval: interval,
+	}
+	if interval > 0 {
+		r.cleanupDone = make(chan struct{})
+		go r.cleanupLoop()
+	}
+	return r
+}
+
+// Close stops the background cleanup goroutine. Safe to call multiple times.
+// After Close returns, no more cleanup queries will be executed.
+func (r *IdempotencyRecordRepository) Close() {
+	r.cleanupOnce.Do(func() {
+		if r.cleanupDone != nil {
+			close(r.cleanupDone)
+		}
+	})
+}
+
+func (r *IdempotencyRecordRepository) cleanupLoop() {
+	ticker := time.NewTicker(r.cleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.cleanupDone:
+			return
+		case <-ticker.C:
+			r.deleteExpired(context.Background())
+		}
+	}
 }
 
 func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *model.IdempotencyRecord) (model.BeginDecision, error) {
 	headersJSON, _ := json.Marshal(record.Response().Headers)
 
-	// First, clean expired records
-	r.deleteExpired(ctx)
-
 	// Try insert — if duplicate key, check existing status
+	// Expired records are cleaned up in the background by the cleanupLoop
+	// goroutine, so each request does not pay the cost of a DELETE scan.
 	err := r.insertRecord(ctx, record, string(headersJSON))
 	if err == nil {
 		return model.Acquired(record), nil
@@ -246,7 +296,7 @@ func (r *IdempotencyRecordRepository) insertRecord(ctx context.Context, record *
 	}
 	_, err := r.db.ExecContext(ctx, r.insertQuery(),
 		record.Key().String(), record.Fingerprint().String(), record.Owner().String(),
-		record.Operation().String(), record.Scope().Service, record.Scope().Tenant, record.Scope().User,
+		record.Operation().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User(),
 		record.Status().String(), headersJSON, string(resp.Body), resp.Codec,
 		expiresAt,
 	)

@@ -15,6 +15,8 @@ import (
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
+const maxBodyBytes = 1 << 20 // 1 MB
+
 // Middleware returns a gin.HandlerFunc that provides idempotency protection.
 //
 // Usage:
@@ -30,9 +32,15 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 		}
 
 		// Read body for fingerprint, then restore so the handler can read it.
+		// Use a bounded reader to prevent OOM from oversized request bodies.
 		var bodyBytes []byte
 		if c.Request.Body != nil {
-			bodyBytes, _ = io.ReadAll(c.Request.Body)
+			limited := io.LimitReader(c.Request.Body, maxBodyBytes+1) // +1 to detect overflow
+			bodyBytes, _ = io.ReadAll(limited)
+			if int64(len(bodyBytes)) > maxBodyBytes {
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
+				return
+			}
 			c.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 		}
 
