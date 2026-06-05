@@ -216,7 +216,7 @@ REDIS_ADDR=localhost:6379 go test -tags=integration -count=1 -v ./tests/
 测试工具：[go-wrk](https://github.com/tsliwowicz/go-wrk) — 50 并发连接
 
 | 场景 | 请求/秒 | 平均延迟 | 说明 |
-| --- | --- | --- | --- |---|
+| --- | --- | --- | --- |
 | **Baseline** (无 Key，放行) | 54,907 | 910µs | 裸 Gin handler，0 额外开销 |
 | **Acquire** (新 Key，首次获取) | 53,841 | 928µs | 创建幂等记录 + 执行 handler + Complete |
 | **Replay** (同 Key，缓存命中) | 53,310 | 937µs | 返回缓存响应，不执行 handler |
@@ -229,7 +229,7 @@ REDIS_ADDR=localhost:6379 go test -tags=integration -count=1 -v ./tests/
 ### IdempotencyService Config
 
 | 字段 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |---|
+| --- | --- | --- | --- |
 | `Disabled` | `bool` | `false` | 显式禁用插件 |
 | `Scope` | `string` | `""` | 服务标识，参与指纹计算 |
 | `Repository` | `IdempotencyRecordRepository` | **必填** | 仓储实现 |
@@ -269,7 +269,7 @@ repo := redisrepo.NewIdempotencyRecordRepository(
 ### Prometheus 指标
 
 | 指标名 | 类型 | 标签 | 说明 |
-| --- | --- | --- | --- |---|
+| --- | --- | --- | --- |
 | `idempotency_begin_total` | Counter | `result_type` | Begin 调用计数 |
 | `idempotency_commit_total` | Counter | `result` | Commit 成功/失败计数 |
 | `idempotency_replay_total` | Counter | — | Replay 命中计数 |
@@ -304,7 +304,7 @@ go tool pprof http://localhost:8080/debug/pprof/heap
 ## 里程碑进度
 
 | 里程碑 | 内容 | 状态 |
-| --- | --- | --- | --- |
+| --- | --- | --- |
 | M1 | 领域层：聚合根、值对象、领域服务、仓储端口 | ✅ |
 | M2 | 应用层与 Memory 仓储：IdempotencyService、command、DTO | ✅ |
 | M3 | Redis 仓储：Lua 原子脚本、JSON record mapper | ✅ |
