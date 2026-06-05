@@ -73,8 +73,8 @@ func (w *captureResponseWriter) CapturedResponse() dto.CapturedResponse {
 }
 
 func copyHeaders(dst, src http.Header) {
-	for k, v := range src {
-		dst[k] = v
+	for k, vs := range src {
+		dst[k] = copyStringSlice(vs)
 	}
 }
 
@@ -84,5 +84,14 @@ func copySlice(b []byte) []byte {
 	}
 	out := make([]byte, len(b))
 	copy(out, b)
+	return out
+}
+
+func copyStringSlice(vs []string) []string {
+	if len(vs) == 0 {
+		return nil
+	}
+	out := make([]string, len(vs))
+	copy(out, vs)
 	return out
 }

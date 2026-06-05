@@ -322,12 +322,13 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 
 	// Create a context that respects both the deadline and the caller's context.
 	notifyCtx, cancelNotify := context.WithDeadline(ctx, deadline)
-	defer cancelNotify()
 
 	// Attempt notification-based wait concurrently with polling.
 	// If the notifier delivers first, we short-circuit.
 	notifyCh := make(chan dto.ReplayResult, 1)
+	notifyDone := make(chan struct{})
 	go func() {
+		defer close(notifyDone)
 		msg, err := s.notifier.Wait(notifyCtx, channel)
 		if err != nil {
 			return // context cancelled or deadline exceeded
@@ -341,15 +342,23 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 			return
 		}
 		if record.Status() == model.StatusCompleted || record.Status() == model.StatusFailed {
-			notifyCh <- dto.ReplayResult{
+			select {
+			case notifyCh <- dto.ReplayResult{
 				Found:        true,
 				Key:          cmd.Key,
 				Record:       record,
 				Response:     fromDomainResponse(record.Response()),
 				ErrorCode:    record.ErrorCode(),
 				ErrorMessage: record.ErrorMessage(),
+			}:
+			case <-ctx.Done():
 			}
 		}
+	}()
+	// Ensure the notify goroutine exits before WaitReplay returns.
+	defer func() {
+		cancelNotify()
+		<-notifyDone
 	}()
 
 	// Polling loop as fallback

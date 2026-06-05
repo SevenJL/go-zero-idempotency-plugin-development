@@ -11,6 +11,7 @@ import (
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
 	appservice "github.com/sevenjl/go-zero-idempotency-plugin-development/application/service"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
@@ -22,6 +23,7 @@ type options struct {
 	skipMethods     map[string]bool
 	heartbeatConfig *appservice.HeartbeatConfig
 	maxBodyBytes    int64
+	logger          port.Logger
 }
 
 func newOptions() *options {
@@ -32,6 +34,7 @@ func newOptions() *options {
 			http.MethodOptions: true,
 		},
 		maxBodyBytes: 1 << 20, // 1 MB default
+		logger:       port.NoopLogger(),
 	}
 }
 
@@ -60,6 +63,16 @@ func WithHeartbeat(cfg appservice.HeartbeatConfig) Option {
 func WithMaxBodyBytes(n int64) Option {
 	return func(o *options) {
 		o.maxBodyBytes = n
+	}
+}
+
+// WithLogger sets the logger for the middleware. If not set, a no-op logger
+// is used (errors are silently discarded).
+func WithLogger(logger port.Logger) Option {
+	return func(o *options) {
+		if logger != nil {
+			o.logger = logger
+		}
 	}
 }
 
@@ -106,11 +119,16 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 				Body:      bodyBytes,
 			}
 
-			beginResult, err := svc.Begin(r.Context(), command.BeginCommand{Request: reqCtx})
-			if err != nil {
-				http.Error(w, "idempotency error", http.StatusInternalServerError)
-				return
-			}
+		beginResult, err := svc.Begin(r.Context(), command.BeginCommand{Request: reqCtx})
+		if err != nil {
+			o.logger.Error(r.Context(), "idempotency begin error",
+				port.Field{Key: "error", Value: err.Error()},
+				port.Field{Key: "method", Value: r.Method},
+				port.Field{Key: "path", Value: r.URL.Path},
+			)
+			http.Error(w, "idempotency error", http.StatusInternalServerError)
+			return
+		}
 
 			switch beginResult.Type {
 			case dto.BeginResultSkipped:

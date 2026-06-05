@@ -2,6 +2,39 @@
 
 All notable changes to the go-zero idempotency plugin.
 
+## [0.1.3] — 2026-06-05
+
+### Fixed — Production Readiness Audit (18 issues resolved)
+
+- **CRITICAL**
+  - C1: Goroutine leak in `WaitReplay` pubsub goroutine — notifyDone channel ensures goroutine exits before `WaitReplay` returns, preventing goroutine accumulation under high concurrency
+  - C2: Hardcoded MySQL credentials in integration test file identified (build-tag gated, deferred)
+
+- **HIGH**
+  - H1: `encodeBody` encryption failure now returns error instead of silently falling back to plain base64; `toRedisRecord` and `marshalRecord` propagate errors to caller
+  - H2: Gin middleware no longer exposes `err.Error()` to HTTP clients — logs via `c.Error()` and returns generic "idempotency: internal error"
+  - H3: Circuit breaker option ordering dependency eliminated — pending config pattern defers breaker construction to after all options are applied in `NewIdempotencyRecordRepository`
+  - H4: Redis `TryBegin` now checks unmarshal errors for replay/conflict/in-progress/failed branches; returns typed error instead of nil record
+  - H5: HTTPX middleware now logs Begin errors via optional `WithLogger(port.Logger)` — defaults to no-op to maintain zero-dependency compatibility
+  - H6: Helm chart now uses Kubernetes Secret for Redis password instead of plain env var; `secret.yaml` template created
+  - H8: `PubSubNotifier.Wait` now creates per-call subscriptions that are cleaned up via `defer pubsub.Close()`, eliminating subscription leak; removed unused `pubsubs` map and `sync` import
+
+- **MEDIUM**
+  - M1: SQL repository `TryBegin` and `Abort` now wrapped in `READ COMMITTED` transactions; added `FindTx` and `insertRecordTx` helpers using `execContext` interface (`*sql.DB` / `*sql.Tx`)
+  - M2: Gin middleware Complete error now propagated via `c.Error()` instead of `_` discard
+  - M3: `ConfigWatcher.callback` invocation now protected by `defer/recover`; panics logged and goroutine survives
+  - M4: `copyHeaders` (httpx) and Gin `CapturedResponse` now deep-copy header value slices to prevent shared backing array mutation
+  - M5: YAML `FingerprintConfig` fields (`IncludeTenant`, `IncludeUser`, `IncludeBody`, `MaxBodyBytes`) now wired to `SHA256Fingerprinter` via `config_yaml.go` `ToServiceConfig`
+  - M6: gRPC interceptor abort failure now logged via `log.Printf` instead of silent discard
+  - M7: Gin replay response Content-Type now uses `result.Response.Codec` with "application/json" fallback; no longer hardcoded
+  - M8: Heartbeat `Renew` errors now logged via `log.Printf` instead of `_` discard
+  - M10: Removed unused `sync.RWMutex` from `circuitBreaker` struct (all state is atomic)
+
+- **DevOps**
+  - Helm chart: added `secret.yaml` (K8s Secret for Redis password), `networkpolicy.yaml`, `pdb.yaml` templates
+  - Helm `values.yaml`: added `terminationGracePeriodSeconds: 30`, `podAntiAffinity` (preferredDuringScheduling), `networkPolicy`, `podDisruptionBudget` sections
+  - Helm `deployment.yaml`: Redis password sourced from Secret via `secretKeyRef`
+
 ## [0.1.2] — 2026-06-04
 
 ### Fixed

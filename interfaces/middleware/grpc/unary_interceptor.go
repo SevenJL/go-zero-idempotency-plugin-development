@@ -6,6 +6,7 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"log"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/dto"
@@ -91,20 +92,19 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 				hb.Stop()
 			}
 
-			if handlerErr != nil {
-				// Business handler failed — abort.
-				if err := svc.Abort(ctx, command.AbortCommand{
-					Key:          beginResult.Key,
-					Fingerprint:  beginResult.Fingerprint,
-					Owner:        beginResult.Owner,
-					ErrorCode:    status.Code(handlerErr).String(),
-					ErrorMessage: handlerErr.Error(),
-				}); err != nil {
-					// Log but don't return — the handler error takes precedence.
-					// The service layer already logs internally.
-				}
-				return resp, handlerErr
+		if handlerErr != nil {
+			// Business handler failed — abort.
+			if err := svc.Abort(ctx, command.AbortCommand{
+				Key:          beginResult.Key,
+				Fingerprint:  beginResult.Fingerprint,
+				Owner:        beginResult.Owner,
+				ErrorCode:    status.Code(handlerErr).String(),
+				ErrorMessage: handlerErr.Error(),
+			}); err != nil {
+				log.Printf("idempotency: abort failed for method %s: %v", info.FullMethod, err)
 			}
+			return resp, handlerErr
+		}
 
 			// Business handler succeeded — cache the response.
 			codec := lookupCodec(registry, info.FullMethod)

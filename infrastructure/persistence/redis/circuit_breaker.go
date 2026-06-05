@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -30,7 +29,6 @@ const (
 // request is admitted — preventing the thundering-herd problem where
 // multiple goroutines race through the half-open gate.
 type circuitBreaker struct {
-	mu           sync.RWMutex
 	mode         storageFailureMode
 	maxFailures  int
 	cooldown     time.Duration

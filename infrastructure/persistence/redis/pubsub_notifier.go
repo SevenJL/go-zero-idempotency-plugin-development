@@ -21,7 +21,6 @@ package redis
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -31,16 +30,12 @@ import (
 // to wait for those events without polling.
 type PubSubNotifier struct {
 	client redisClient
-
-	mu       sync.RWMutex
-	pubsubs  map[string]*goredis.PubSub // keyed by channel name
 }
 
 // NewPubSubNotifier creates a Pub/Sub-based notifier.
 func NewPubSubNotifier(rds redisClient) *PubSubNotifier {
 	return &PubSubNotifier{
-		client:  rds,
-		pubsubs: make(map[string]*goredis.PubSub),
+		client: rds,
 	}
 }
 
@@ -60,20 +55,18 @@ func (n *PubSubNotifier) Notify(ctx context.Context, channel, message string) er
 
 // Wait subscribes to a channel and blocks until a message is received
 // or the context is cancelled. Returns the message payload on success.
+// The subscription is unsubscribed when the call returns.
 func (n *PubSubNotifier) Wait(ctx context.Context, channel string) (string, error) {
-	n.mu.Lock()
-	pubsub, ok := n.pubsubs[channel]
-	if !ok {
-		switch c := n.client.(type) {
-		case interface{ Subscribe(ctx context.Context, channels ...string) *goredis.PubSub }:
-			pubsub = c.Subscribe(ctx, channel)
-		default:
-			n.mu.Unlock()
-			return "", fmt.Errorf("redis: client does not support Subscribe")
-		}
-		n.pubsubs[channel] = pubsub
+	var pubsub *goredis.PubSub
+	switch c := n.client.(type) {
+	case interface{ Subscribe(ctx context.Context, channels ...string) *goredis.PubSub }:
+		pubsub = c.Subscribe(ctx, channel)
+	default:
+		return "", fmt.Errorf("redis: client does not support Subscribe")
 	}
-	n.mu.Unlock()
+	defer func() {
+		_ = pubsub.Close()
+	}()
 
 	// Wait for the first message on the channel
 	ch := pubsub.Channel()
@@ -88,23 +81,10 @@ func (n *PubSubNotifier) Wait(ctx context.Context, channel string) (string, erro
 	}
 }
 
-// Close unsubscribes all active subscriptions. Call during graceful shutdown.
-// All subscriptions are closed even if some produce errors — the first error
-// encountered is returned after all close attempts complete.
+// Close is a no-op. Each Wait call cleans up its own subscription.
+// Kept for interface compatibility.
 func (n *PubSubNotifier) Close() error {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	var firstErr error
-	for channel, pubsub := range n.pubsubs {
-		if err := pubsub.Close(); err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("redis: close pubsub %s: %w", channel, err)
-			}
-		}
-	}
-	n.pubsubs = make(map[string]*goredis.PubSub)
-	return firstErr
+	return nil
 }
 
 // ChannelFor returns the Redis Pub/Sub channel name for a given key.

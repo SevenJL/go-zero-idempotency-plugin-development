@@ -50,7 +50,7 @@ func (c Config) normalized() Config {
 		c.KeyResolver = HeaderKeyResolver{Required: true}
 	}
 	if c.Fingerprinter == nil {
-		c.Fingerprinter = SHA256Fingerprinter{}
+		c.Fingerprinter = NewSHA256Fingerprinter()
 	}
 	if c.OwnerFactory == nil {
 		c.OwnerFactory = RandomOwnerFactory{}

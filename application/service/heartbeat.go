@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
@@ -83,8 +84,9 @@ func (h *Heartbeat) loop() {
 		case <-h.ctx.Done():
 			return
 		case <-ticker.C:
-			// Renew is best-effort — ignore errors.
-			_ = h.repo.Renew(h.ctx, h.key, h.owner, h.ttl)
+			if err := h.repo.Renew(h.ctx, h.key, h.owner, h.ttl); err != nil {
+				log.Printf("idempotency: heartbeat renew failed for key %s: %v", h.key.String(), err)
+			}
 		}
 	}
 }

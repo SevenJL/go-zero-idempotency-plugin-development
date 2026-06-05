@@ -42,15 +42,45 @@ func (r HeaderKeyResolver) Resolve(_ context.Context, request dto.RequestContext
 	return valueobject.NewIdempotencyKey(value)
 }
 
-type SHA256Fingerprinter struct{}
+type SHA256Fingerprinter struct {
+	IncludeTenant bool
+	IncludeUser   bool
+	IncludeBody   bool
+	MaxBodyBytes  int64
+}
 
-func (SHA256Fingerprinter) Fingerprint(_ context.Context, request dto.RequestContext) (valueobject.Fingerprint, error) {
-	parts := []string{
-		request.Scope.Service(),
-		request.Scope.Tenant(),
-		request.Scope.User(),
-		request.Operation.String(),
-		string(canonicalBody(request.Body)),
+// NewSHA256Fingerprinter creates a fingerprinter with defaults suitable
+// for production use. All dimensions are included by default.
+func NewSHA256Fingerprinter() SHA256Fingerprinter {
+	return SHA256Fingerprinter{
+		IncludeTenant: true,
+		IncludeUser:   true,
+		IncludeBody:   true,
+		MaxBodyBytes:  1 << 20,
+	}
+}
+
+func (f SHA256Fingerprinter) Fingerprint(_ context.Context, request dto.RequestContext) (valueobject.Fingerprint, error) {
+	var parts []string
+	if f.IncludeTenant {
+		parts = append(parts, request.Scope.Service(), request.Scope.Tenant())
+	} else {
+		parts = append(parts, request.Scope.Service())
+	}
+	if f.IncludeUser {
+		parts = append(parts, request.Scope.User())
+	}
+	parts = append(parts, request.Operation.String())
+	if f.IncludeBody && len(request.Body) > 0 {
+		body := request.Body
+		maxBytes := f.MaxBodyBytes
+		if maxBytes <= 0 {
+			maxBytes = 1 << 20
+		}
+		if int64(len(body)) > maxBytes {
+			body = body[:maxBytes]
+		}
+		parts = append(parts, string(canonicalBody(body)))
 	}
 	sum := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return valueobject.NewFingerprint("sha256:" + hex.EncodeToString(sum[:]))

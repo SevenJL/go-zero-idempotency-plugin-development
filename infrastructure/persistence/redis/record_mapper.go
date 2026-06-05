@@ -3,6 +3,7 @@ package redis
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
@@ -45,9 +46,12 @@ type redisError struct {
 
 // marshalRecord converts a domain IdempotencyRecord to JSON bytes for Redis
 // storage. When encryptor is non-nil, the response body is encrypted via
-// AES-GCM before encoding.
+// AES-GCM before encoding. Returns an error if encryption is configured but fails.
 func marshalRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) ([]byte, error) {
-	rr := toRedisRecord(r, encryptor)
+	rr, err := toRedisRecord(r, encryptor)
+	if err != nil {
+		return nil, fmt.Errorf("marshalRecord: %w", err)
+	}
 	return json.Marshal(rr)
 }
 
@@ -63,14 +67,17 @@ func unmarshalRecord(data []byte, encryptor BodyEncryptor) (*model.IdempotencyRe
 }
 
 // encodeBody applies optional encryption to the response body.
-func encodeBody(body []byte, encryptor BodyEncryptor) string {
+// Returns an error if encryption is configured but fails, preventing
+// silent fallback to unencrypted storage.
+func encodeBody(body []byte, encryptor BodyEncryptor) (string, error) {
 	if encryptor != nil {
 		encrypted, err := encryptor.Encrypt(body)
-		if err == nil {
-			return encrypted
+		if err != nil {
+			return "", fmt.Errorf("encodeBody: encrypt: %w", err)
 		}
+		return encrypted, nil
 	}
-	return base64.StdEncoding.EncodeToString(body)
+	return base64.StdEncoding.EncodeToString(body), nil
 }
 
 // decodeBody reverses encodeBody.
@@ -89,7 +96,7 @@ func bodyEncoding(encryptor BodyEncryptor) string {
 	return "base64"
 }
 
-func toRedisRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) redisRecord {
+func toRedisRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) (redisRecord, error) {
 	rr := redisRecord{
 		Version:     1,
 		Status:      r.Status().String(),
@@ -108,10 +115,14 @@ func toRedisRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) redisRec
 	resp := r.Response()
 	// Only store if the response is meaningful.
 	if !resp.IsEmpty() {
+		encoded, err := encodeBody(resp.Body, encryptor)
+		if err != nil {
+			return redisRecord{}, err
+		}
 		rr.Response = &redisCapturedResponse{
 			StatusCode:   resp.StatusCode,
 			Headers:      resp.Headers,
-			Body:         encodeBody(resp.Body, encryptor),
+			Body:         encoded,
 			BodyEncoding: bodyEncoding(encryptor),
 			Codec:        resp.Codec,
 		}
@@ -124,7 +135,7 @@ func toRedisRecord(r *model.IdempotencyRecord, encryptor BodyEncryptor) redisRec
 		}
 	}
 
-	return rr
+	return rr, nil
 }
 
 func fromRedisRecord(rr redisRecord, encryptor BodyEncryptor) *model.IdempotencyRecord {

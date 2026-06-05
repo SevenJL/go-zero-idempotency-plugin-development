@@ -98,20 +98,31 @@ func (r *IdempotencyRecordRepository) cleanupLoop() {
 }
 
 func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *model.IdempotencyRecord) (model.BeginDecision, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return model.BeginDecision{}, fmt.Errorf("sql: begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback() // no-op if already committed
+	}()
+
 	headersJSON, _ := json.Marshal(record.Response().Headers)
 
-	// Try insert — if duplicate key, check existing status
-	// Expired records are cleaned up in the background by the cleanupLoop
-	// goroutine, so each request does not pay the cost of a DELETE scan.
-	err := r.insertRecord(ctx, record, string(headersJSON))
+	err = r.insertRecordTx(ctx, tx, record, string(headersJSON))
 	if err == nil {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return model.BeginDecision{}, fmt.Errorf("sql: commit tx: %w", commitErr)
+		}
 		return model.Acquired(record), nil
 	}
 
-	// Duplicate key — fetch existing record
-	existing, findErr := r.Find(ctx, record.Key())
+	existing, findErr := r.FindTx(ctx, tx, record.Key())
 	if findErr != nil || existing == nil {
 		return model.BeginDecision{}, fmt.Errorf("sql: duplicate key but record not found: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return model.BeginDecision{}, fmt.Errorf("sql: commit tx: %w", err)
 	}
 
 	if existing.Fingerprint().String() != record.Fingerprint().String() {
@@ -174,38 +185,45 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 }
 
 func (r *IdempotencyRecordRepository) Abort(ctx context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, mode model.FailureMode) error {
-	// Look up the record to obtain the scope_service for correct targeting.
-	// The unique constraint is on (scope_service, idempotency_key), so we
-	// must scope the DELETE/UPDATE to the correct service.
-	existing, err := r.Find(ctx, key)
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("sql: abort begin tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	existing, err := r.FindTx(ctx, tx, key)
 	if err != nil {
 		return fmt.Errorf("sql: abort find: %w", err)
 	}
 	if existing == nil {
+		_ = tx.Commit()
 		return nil // record already cleaned up
 	}
 	scopeService := existing.Scope().Service()
 
 	switch mode {
 	case model.FailureModeDelete:
-		_, err := r.db.ExecContext(ctx,
+		_, err := tx.ExecContext(ctx,
 			`DELETE FROM idempotency_records WHERE scope_service = ? AND idempotency_key = ? AND owner = ?`,
 			scopeService, key.String(), owner.String())
 		if err != nil {
 			return fmt.Errorf("sql: abort delete: %w", err)
 		}
-		return nil
 	case model.FailureModeCache:
-		_, err := r.db.ExecContext(ctx,
+		_, err := tx.ExecContext(ctx,
 			`UPDATE idempotency_records SET status = 'failed', updated_at = NOW(3) WHERE scope_service = ? AND idempotency_key = ? AND owner = ?`,
 			scopeService, key.String(), owner.String())
 		if err != nil {
 			return fmt.Errorf("sql: abort cache: %w", err)
 		}
-		return nil
-	default:
-		return nil
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sql: abort commit: %w", err)
+	}
+	return nil
 }
 
 func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
@@ -281,12 +299,16 @@ func (r *IdempotencyRecordRepository) updateQuery() string {
 }
 
 func (r *IdempotencyRecordRepository) insertRecord(ctx context.Context, record *model.IdempotencyRecord, headersJSON string) error {
+	return r.insertRecordTx(ctx, r.db, record, headersJSON)
+}
+
+func (r *IdempotencyRecordRepository) insertRecordTx(ctx context.Context, exec execContext, record *model.IdempotencyRecord, headersJSON string) error {
 	resp := record.Response()
 	expiresAt := record.ExpiresAt().Format("2006-01-02 15:04:05.000")
 	now := record.CreatedAt().Format("2006-01-02 15:04:05.000")
 
 	if r.driver == DriverPostgres {
-		_, err := r.db.ExecContext(ctx, r.insertQuery(),
+		_, err := exec.ExecContext(ctx, r.insertQuery(),
 			record.Key().String(), record.Fingerprint().String(), record.Owner().String(),
 			record.Operation().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User(),
 			record.Status().String(), headersJSON, string(resp.Body), resp.Codec,
@@ -294,7 +316,7 @@ func (r *IdempotencyRecordRepository) insertRecord(ctx context.Context, record *
 		)
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, r.insertQuery(),
+	_, err := exec.ExecContext(ctx, r.insertQuery(),
 		record.Key().String(), record.Fingerprint().String(), record.Owner().String(),
 		record.Operation().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User(),
 		record.Status().String(), headersJSON, string(resp.Body), resp.Codec,
@@ -302,6 +324,47 @@ func (r *IdempotencyRecordRepository) insertRecord(ctx context.Context, record *
 	)
 	return err
 }
+
+// execContext abstracts *sql.DB and *sql.Tx for queries.
+type execContext interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// FindTx reads a record within a transaction.
+func (r *IdempotencyRecordRepository) FindTx(ctx context.Context, exec execContext, key valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
+	row := exec.QueryRowContext(ctx,
+		`SELECT idempotency_key, fingerprint, owner, operation, scope_service, scope_tenant, scope_user,
+		        status, status_code, resp_headers, resp_body, resp_codec, error_code, error_message,
+		        created_at, updated_at, expires_at
+		 FROM idempotency_records
+		 WHERE idempotency_key = ? AND expires_at > NOW()
+		 ORDER BY created_at DESC LIMIT 1`,
+		key.String(),
+	)
+
+	var rec sqlRecord
+	var headersStr string
+	err := row.Scan(
+		&rec.Key, &rec.Fingerprint, &rec.Owner, &rec.Operation,
+		&rec.ScopeService, &rec.ScopeTenant, &rec.ScopeUser,
+		&rec.Status, &rec.StatusCode, &headersStr, &rec.RespBody, &rec.RespCodec,
+		&rec.ErrorCode, &rec.ErrorMessage,
+		&rec.CreatedAt, &rec.UpdatedAt, &rec.ExpiresAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("sql: find: %w", err)
+	}
+
+	rec.RespHeaders = headersStr
+	return rec.toDomain()
+}
+
+var _ execContext = (*sql.DB)(nil)
+var _ execContext = (*sql.Tx)(nil)
 
 func (r *IdempotencyRecordRepository) deleteExpired(ctx context.Context) {
 	r.db.ExecContext(ctx, `DELETE FROM idempotency_records WHERE expires_at < NOW()`)

@@ -57,11 +57,12 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 			Body:      bodyBytes,
 		}
 
-		beginResult, err := svc.Begin(c.Request.Context(), command.BeginCommand{Request: reqCtx})
-		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+	beginResult, err := svc.Begin(c.Request.Context(), command.BeginCommand{Request: reqCtx})
+	if err != nil {
+		c.Error(err)
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency: internal error"})
+		return
+	}
 
 		switch beginResult.Type {
 		case dto.BeginResultSkipped:
@@ -76,13 +77,15 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 
 			// If the handler aborted, the captured response may be incomplete.
 			// We still complete to prevent indefinite processing state.
-			resp := crw.CapturedResponse()
-			_ = svc.Complete(c.Request.Context(), command.CompleteCommand{
-				Key:         beginResult.Key,
-				Fingerprint: beginResult.Fingerprint,
-				Owner:       beginResult.Owner,
-				Response:    resp,
-			})
+		resp := crw.CapturedResponse()
+		if err := svc.Complete(c.Request.Context(), command.CompleteCommand{
+			Key:         beginResult.Key,
+			Fingerprint: beginResult.Fingerprint,
+			Owner:       beginResult.Owner,
+			Response:    resp,
+		}); err != nil {
+			c.Error(err)
+		}
 
 		case dto.BeginResultReplay:
 			c.Header("Idempotency-Replayed", "true")
@@ -114,10 +117,13 @@ func writeReplayGin(c *gin.Context, result dto.BeginResult) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	// Write the body as raw bytes — it is already serialised (JSON / proto / etc.),
-	// so we must not JSON-encode it again.
+	// Use the codec's content type if available, otherwise default to JSON.
+	contentType := result.Response.Codec
+	if contentType == "" {
+		contentType = "application/json"
+	}
 	if len(result.Response.Body) > 0 {
-		c.Data(status, "application/json", result.Response.Body)
+		c.Data(status, contentType, result.Response.Body)
 	} else {
 		c.AbortWithStatus(status)
 	}

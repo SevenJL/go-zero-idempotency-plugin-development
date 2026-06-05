@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -142,5 +143,17 @@ func (w *ConfigWatcher) checkAndReload() {
 	w.logger.Info(context.Background(), "config reloaded",
 		port.Field{Key: "path", Value: w.path},
 	)
+	w.invokeCallback(cfg)
+}
+
+func (w *ConfigWatcher) invokeCallback(cfg ConfigFile) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error(context.Background(), "config watch callback panicked",
+				port.Field{Key: "path", Value: w.path},
+				port.Field{Key: "panic", Value: fmt.Sprintf("%v", r)},
+			)
+		}
+	}()
 	w.callback(cfg)
 }

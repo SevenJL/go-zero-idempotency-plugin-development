@@ -38,6 +38,13 @@ type IdempotencyRecordRepository struct {
 	breaker   *circuitBreaker // nil when circuit breaker is disabled
 	encryptor BodyEncryptor   // nil means no encryption (plain base64)
 	notifier  *PubSubNotifier // nil means no pub/sub notifications
+
+	// Pending breaker config — used to accumulate settings before construction.
+	breakerMode      storageFailureMode
+	breakerFailures  int
+	breakerCooldown  time.Duration
+	breakerModeSet   bool
+	breakerDisabled  bool
 }
 
 // RepositoryOption configures the Redis repository.
@@ -79,11 +86,8 @@ func WithHashTag(tag string) RepositoryOption {
 // WithBreakerMaxFailures).
 func WithStorageFailureMode(mode string) RepositoryOption {
 	return func(r *IdempotencyRecordRepository) {
-		if r.breaker == nil {
-			r.breaker = newCircuitBreaker(storageFailureMode(mode), 5, 30*time.Second)
-		} else {
-			r.breaker.mode = storageFailureMode(mode)
-		}
+		r.breakerMode = storageFailureMode(mode)
+		r.breakerModeSet = true
 	}
 }
 
@@ -92,14 +96,10 @@ func WithStorageFailureMode(mode string) RepositoryOption {
 func WithBreakerMaxFailures(n int) RepositoryOption {
 	return func(r *IdempotencyRecordRepository) {
 		if n <= 0 {
-			r.breaker = nil
+			r.breakerDisabled = true
 			return
 		}
-		if r.breaker == nil {
-			r.breaker = newCircuitBreaker(storageFailClosed, n, 30*time.Second)
-		} else {
-			r.breaker.maxFailures = n
-		}
+		r.breakerFailures = n
 	}
 }
 
@@ -107,10 +107,8 @@ func WithBreakerMaxFailures(n int) RepositoryOption {
 // transitions from open to half-open. Defaults to 30s.
 func WithBreakerCooldown(d time.Duration) RepositoryOption {
 	return func(r *IdempotencyRecordRepository) {
-		if r.breaker == nil {
-			r.breaker = newCircuitBreaker(storageFailClosed, 5, d)
-		} else {
-			r.breaker.cooldown = d
+		if d > 0 {
+			r.breakerCooldown = d
 		}
 	}
 }
@@ -149,6 +147,23 @@ func NewIdempotencyRecordRepository(rds redisClient, opts ...RepositoryOption) *
 	}
 	for _, opt := range opts {
 		opt(repo)
+	}
+	// Build circuit breaker from accumulated config after all options applied.
+	// This ensures option ordering does not silently disable the breaker.
+	if !repo.breakerDisabled {
+		failures := repo.breakerFailures
+		if failures <= 0 {
+			failures = 5
+		}
+		cooldown := repo.breakerCooldown
+		if cooldown <= 0 {
+			cooldown = 30 * time.Second
+		}
+		mode := repo.breakerMode
+		if !repo.breakerModeSet {
+			mode = storageFailClosed
+		}
+		repo.breaker = newCircuitBreaker(mode, failures, cooldown)
 	}
 	return repo
 }
@@ -227,16 +242,28 @@ func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *mode
 		existing, _ := unmarshalRecord(payload, r.encryptor)
 		return model.Acquired(existing), nil
 	case luaReplay:
-		existing, _ := unmarshalRecord(payload, r.encryptor)
+		existing, err := unmarshalRecord(payload, r.encryptor)
+		if err != nil {
+			return model.BeginDecision{}, fmt.Errorf("redis: unmarshal replay record: %w", err)
+		}
 		return model.Replay(existing), nil
 	case luaConflict:
-		existing, _ := unmarshalRecord(payload, r.encryptor)
+		existing, err := unmarshalRecord(payload, r.encryptor)
+		if err != nil {
+			return model.BeginDecision{}, fmt.Errorf("redis: unmarshal conflict record: %w", err)
+		}
 		return model.Conflict(existing), nil
 	case luaInProgress:
-		existing, _ := unmarshalRecord(payload, r.encryptor)
+		existing, err := unmarshalRecord(payload, r.encryptor)
+		if err != nil {
+			return model.BeginDecision{}, fmt.Errorf("redis: unmarshal in-progress record: %w", err)
+		}
 		return model.InProgress(existing), nil
 	case luaFailed:
-		existing, _ := unmarshalRecord(payload, r.encryptor)
+		existing, err := unmarshalRecord(payload, r.encryptor)
+		if err != nil {
+			return model.BeginDecision{}, fmt.Errorf("redis: unmarshal failed record: %w", err)
+		}
 		return model.Failed(existing), nil
 	default:
 		return model.BeginDecision{}, fmt.Errorf("redis: unexpected begin result: %s", luaResult(result))

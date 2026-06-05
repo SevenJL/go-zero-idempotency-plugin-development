@@ -25,6 +25,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "idempotency-example.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -42,6 +43,13 @@ spec:
               value: "release"
             - name: REDIS_ADDR
               value: {{ .Values.redis.addr | quote }}
+            {{- if .Values.redis.password }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "idempotency-example.fullname" . }}-redis
+                  key: password
+            {{- end }}
             - name: IDEMPOTENCY_ENABLED
               value: {{ .Values.idempotency.enabled | quote }}
             - name: IDEMPOTENCY_SCOPE

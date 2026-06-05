@@ -190,6 +190,21 @@ func (f ConfigFile) ToServiceConfig(
 		}),
 	}
 
+	// Fingerprinter
+	fp := NewSHA256Fingerprinter()
+	if f.Fingerprint.IncludeTenant != nil {
+		fp.IncludeTenant = *f.Fingerprint.IncludeTenant
+	}
+	if f.Fingerprint.IncludeUser != nil {
+		fp.IncludeUser = *f.Fingerprint.IncludeUser
+	}
+	if f.Fingerprint.IncludeBody != nil {
+		fp.IncludeBody = *f.Fingerprint.IncludeBody
+	}
+	if f.Fingerprint.MaxBodyBytes > 0 {
+		fp.MaxBodyBytes = f.Fingerprint.MaxBodyBytes
+	}
+	cfg.Fingerprinter = fp
 	// Key resolver
 	headerName := f.Key.HeaderName
 	if headerName == "" {

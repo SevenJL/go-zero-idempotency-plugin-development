@@ -61,7 +61,9 @@ func (w *ginResponseWriter) CapturedResponse() dto.CapturedResponse {
 
 	headers := make(map[string][]string, len(w.headers))
 	for k, v := range w.headers {
-		headers[k] = v
+		vs := make([]string, len(v))
+		copy(vs, v)
+		headers[k] = vs
 	}
 
 	body := make([]byte, w.body.Len())
