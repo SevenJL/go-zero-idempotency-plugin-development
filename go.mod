@@ -3,6 +3,7 @@ module github.com/sevenjl/go-zero-idempotency-plugin-development
 go 1.25.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/zeromicro/go-zero v1.10.2

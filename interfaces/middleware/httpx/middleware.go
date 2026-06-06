@@ -101,12 +101,22 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 			var bodyBytes []byte
 			if r.Body != nil {
 				maxBytes := o.maxBodyBytes
-				if maxBytes <= 0 {
-					maxBytes = 1 << 20 // fallback default
+				reader := io.Reader(r.Body)
+				if maxBytes > 0 {
+					reader = io.LimitReader(r.Body, maxBytes+1) // +1 to detect overflow
 				}
-				limited := io.LimitReader(r.Body, maxBytes+1) // +1 to detect overflow
-				bodyBytes, _ = io.ReadAll(limited)
-				if int64(len(bodyBytes)) > maxBytes {
+				var err error
+				bodyBytes, err = io.ReadAll(reader)
+				if err != nil {
+					o.logger.Error(r.Context(), "idempotency read body error",
+						port.Field{Key: "error", Value: err.Error()},
+						port.Field{Key: "method", Value: r.Method},
+						port.Field{Key: "path", Value: r.URL.Path},
+					)
+					http.Error(w, "request body read error", http.StatusBadRequest)
+					return
+				}
+				if maxBytes > 0 && int64(len(bodyBytes)) > maxBytes {
 					http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 					return
 				}
@@ -119,16 +129,16 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 				Body:      bodyBytes,
 			}
 
-		beginResult, err := svc.Begin(r.Context(), command.BeginCommand{Request: reqCtx})
-		if err != nil {
-			o.logger.Error(r.Context(), "idempotency begin error",
-				port.Field{Key: "error", Value: err.Error()},
-				port.Field{Key: "method", Value: r.Method},
-				port.Field{Key: "path", Value: r.URL.Path},
-			)
-			http.Error(w, "idempotency error", http.StatusInternalServerError)
-			return
-		}
+			beginResult, err := svc.Begin(r.Context(), command.BeginCommand{Request: reqCtx})
+			if err != nil {
+				o.logger.Error(r.Context(), "idempotency begin error",
+					port.Field{Key: "error", Value: err.Error()},
+					port.Field{Key: "method", Value: r.Method},
+					port.Field{Key: "path", Value: r.URL.Path},
+				)
+				http.Error(w, "idempotency error", http.StatusInternalServerError)
+				return
+			}
 
 			switch beginResult.Type {
 			case dto.BeginResultSkipped:

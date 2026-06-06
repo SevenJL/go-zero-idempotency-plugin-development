@@ -36,7 +36,12 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 		var bodyBytes []byte
 		if c.Request.Body != nil {
 			limited := io.LimitReader(c.Request.Body, maxBodyBytes+1) // +1 to detect overflow
-			bodyBytes, _ = io.ReadAll(limited)
+			var err error
+			bodyBytes, err = io.ReadAll(limited)
+			if err != nil {
+				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "request body read error"})
+				return
+			}
 			if int64(len(bodyBytes)) > maxBodyBytes {
 				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
 				return
@@ -57,12 +62,12 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 			Body:      bodyBytes,
 		}
 
-	beginResult, err := svc.Begin(c.Request.Context(), command.BeginCommand{Request: reqCtx})
-	if err != nil {
-		c.Error(err)
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency: internal error"})
-		return
-	}
+		beginResult, err := svc.Begin(c.Request.Context(), command.BeginCommand{Request: reqCtx})
+		if err != nil {
+			c.Error(err)
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency: internal error"})
+			return
+		}
 
 		switch beginResult.Type {
 		case dto.BeginResultSkipped:
@@ -77,15 +82,15 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 
 			// If the handler aborted, the captured response may be incomplete.
 			// We still complete to prevent indefinite processing state.
-		resp := crw.CapturedResponse()
-		if err := svc.Complete(c.Request.Context(), command.CompleteCommand{
-			Key:         beginResult.Key,
-			Fingerprint: beginResult.Fingerprint,
-			Owner:       beginResult.Owner,
-			Response:    resp,
-		}); err != nil {
-			c.Error(err)
-		}
+			resp := crw.CapturedResponse()
+			if err := svc.Complete(c.Request.Context(), command.CompleteCommand{
+				Key:         beginResult.Key,
+				Fingerprint: beginResult.Fingerprint,
+				Owner:       beginResult.Owner,
+				Response:    resp,
+			}); err != nil {
+				c.Error(err)
+			}
 
 		case dto.BeginResultReplay:
 			c.Header("Idempotency-Replayed", "true")
