@@ -11,6 +11,7 @@ type CompleteCommand struct {
 	Key         valueobject.IdempotencyKey
 	Fingerprint valueobject.Fingerprint
 	Owner       valueobject.Owner
+	Scope       valueobject.Scope
 	Response    dto.CapturedResponse
 	Now         time.Time
 }

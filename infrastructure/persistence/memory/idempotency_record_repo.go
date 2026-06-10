@@ -46,7 +46,7 @@ func (r *IdempotencyRecordRepository) TryBegin(_ context.Context, record *model.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := record.Key().String()
+	key := storageKey(record.Key(), record.Scope())
 	existing := r.records[key]
 	if existing == nil || existing.IsExpired(r.now()) {
 		// This branch mirrors the Redis Lua begin script: check absence/expiry
@@ -73,7 +73,7 @@ func (r *IdempotencyRecordRepository) Commit(_ context.Context, record *model.Id
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := record.Key().String()
+	key := storageKey(record.Key(), record.Scope())
 	existing := r.records[key]
 	if existing == nil {
 		return model.ErrInvalidState
@@ -100,15 +100,19 @@ func (r *IdempotencyRecordRepository) Commit(_ context.Context, record *model.Id
 }
 
 func (r *IdempotencyRecordRepository) Abort(_ context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, mode model.FailureMode) error {
+	return r.AbortScoped(context.Background(), key, valueobject.Scope{}, owner, mode)
+}
+
+func (r *IdempotencyRecordRepository) AbortScoped(_ context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope, owner valueobject.Owner, mode model.FailureMode) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing := r.records[key.String()]
+	storage, existing := r.lookupLocked(key, scope)
 	if existing == nil {
 		return nil
 	}
 	if existing.IsExpired(r.now()) {
-		delete(r.records, key.String())
+		delete(r.records, storage)
 		return model.ErrInvalidState
 	}
 	if !existing.Owner().Equals(owner) {
@@ -119,21 +123,25 @@ func (r *IdempotencyRecordRepository) Abort(_ context.Context, key valueobject.I
 	}
 
 	if mode == model.FailureModeDelete {
-		delete(r.records, key.String())
+		delete(r.records, storage)
 	}
 	return nil
 }
 
 func (r *IdempotencyRecordRepository) Renew(_ context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, ttl time.Duration) error {
+	return r.RenewScoped(context.Background(), key, valueobject.Scope{}, owner, ttl)
+}
+
+func (r *IdempotencyRecordRepository) RenewScoped(_ context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope, owner valueobject.Owner, ttl time.Duration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing := r.records[key.String()]
+	storage, existing := r.lookupLocked(key, scope)
 	if existing == nil {
 		return nil // best-effort: key may have already been cleaned up
 	}
 	if existing.IsExpired(r.now()) {
-		delete(r.records, key.String())
+		delete(r.records, storage)
 		return nil
 	}
 	if !existing.Owner().Equals(owner) {
@@ -159,21 +167,51 @@ func (r *IdempotencyRecordRepository) Renew(_ context.Context, key valueobject.I
 		UpdatedAt:    r.now(),
 		ExpiresAt:    r.now().Add(ttl),
 	})
-	r.records[key.String()] = updated
+	r.records[storage] = updated
 	return nil
 }
 
 func (r *IdempotencyRecordRepository) Find(_ context.Context, key valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
+	return r.FindScoped(context.Background(), key, valueobject.Scope{})
+}
+
+func (r *IdempotencyRecordRepository) FindScoped(_ context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope) (*model.IdempotencyRecord, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	existing := r.records[key.String()]
+	storage, existing := r.lookupLocked(key, scope)
 	if existing == nil {
 		return nil, nil
 	}
 	if existing.IsExpired(r.now()) {
-		delete(r.records, key.String())
+		delete(r.records, storage)
 		return nil, nil
 	}
 	return existing.Clone(), nil
 }
+
+func (r *IdempotencyRecordRepository) lookupLocked(key valueobject.IdempotencyKey, scope valueobject.Scope) (string, *model.IdempotencyRecord) {
+	storage := storageKey(key, scope)
+	if existing := r.records[storage]; existing != nil || !scope.IsZero() {
+		return storage, existing
+	}
+	for candidate, record := range r.records {
+		if record.Key().String() == key.String() {
+			return candidate, record
+		}
+	}
+	return storage, nil
+}
+
+func storageKey(key valueobject.IdempotencyKey, scope valueobject.Scope) string {
+	if scope.IsZero() {
+		return key.String()
+	}
+	return key.String() + "\x00" + scope.Service() + "\x00" + scope.Tenant() + "\x00" + scope.User()
+}
+
+var _ interface {
+	FindScoped(context.Context, valueobject.IdempotencyKey, valueobject.Scope) (*model.IdempotencyRecord, error)
+	AbortScoped(context.Context, valueobject.IdempotencyKey, valueobject.Scope, valueobject.Owner, model.FailureMode) error
+	RenewScoped(context.Context, valueobject.IdempotencyKey, valueobject.Scope, valueobject.Owner, time.Duration) error
+} = (*IdempotencyRecordRepository)(nil)

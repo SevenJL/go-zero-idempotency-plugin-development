@@ -491,8 +491,8 @@ func TestDifferentTenantProducesConflict(t *testing.T) {
 
 	// Same key but different tenant → different fingerprint → conflict
 	r2 := beginReqWithTenant(t, svc, "key-015-ABCDEFGHI", `{"sku":"A"}`, "tenant-B", "user-1")
-	if r2.Type != dto.BeginResultConflict {
-		t.Fatalf("second Begin (different tenant): got %s, want conflict", r2.Type)
+	if r2.Type != dto.BeginResultAcquired {
+		t.Fatalf("second Begin (different tenant): got %s, want acquired", r2.Type)
 	}
 }
 

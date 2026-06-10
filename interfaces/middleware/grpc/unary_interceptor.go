@@ -6,6 +6,7 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
@@ -67,11 +68,11 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 			},
 		})
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "idempotency begin: %v", err)
+			return nil, status.Errorf(beginErrorCode(err), "idempotency begin: %v", err)
 		}
 
 		switch beginResult.Type {
-		case dto.BeginResultSkipped:
+		case dto.BeginResultSkipped, dto.BeginResultPassThrough:
 			return handler(ctx, req)
 
 		case dto.BeginResultAcquired:
@@ -80,6 +81,7 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 			if hbCfg != nil {
 				cfg := *hbCfg
 				cfg.Key = beginResult.Key
+				cfg.Scope = beginResult.Scope
 				cfg.Owner = beginResult.Owner
 				hb = appservice.NewHeartbeat(cfg)
 				ctx = hb.Start(ctx)
@@ -92,19 +94,20 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 				hb.Stop()
 			}
 
-		if handlerErr != nil {
-			// Business handler failed — abort.
-			if err := svc.Abort(ctx, command.AbortCommand{
-				Key:          beginResult.Key,
-				Fingerprint:  beginResult.Fingerprint,
-				Owner:        beginResult.Owner,
-				ErrorCode:    status.Code(handlerErr).String(),
-				ErrorMessage: handlerErr.Error(),
-			}); err != nil {
-				log.Printf("idempotency: abort failed for method %s: %v", info.FullMethod, err)
+			if handlerErr != nil {
+				// Business handler failed — abort.
+				if err := svc.Abort(ctx, command.AbortCommand{
+					Key:          beginResult.Key,
+					Fingerprint:  beginResult.Fingerprint,
+					Owner:        beginResult.Owner,
+					Scope:        beginResult.Scope,
+					ErrorCode:    status.Code(handlerErr).String(),
+					ErrorMessage: handlerErr.Error(),
+				}); err != nil {
+					log.Printf("idempotency: abort failed for method %s: %v", info.FullMethod, err)
+				}
+				return resp, handlerErr
 			}
-			return resp, handlerErr
-		}
 
 			// Business handler succeeded — cache the response.
 			codec := lookupCodec(registry, info.FullMethod)
@@ -114,6 +117,7 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 				Key:         beginResult.Key,
 				Fingerprint: beginResult.Fingerprint,
 				Owner:       beginResult.Owner,
+				Scope:       beginResult.Scope,
 				Response: dto.CapturedResponse{
 					Codec: codec.ContentType(),
 					Body:  respBody,
@@ -139,6 +143,17 @@ func UnaryServerInterceptorWithHeartbeat(svc *appservice.IdempotencyService, reg
 		default:
 			return nil, status.Error(codes.Internal, "idempotency: unexpected begin result")
 		}
+	}
+}
+
+func beginErrorCode(err error) codes.Code {
+	switch {
+	case errors.Is(err, appservice.ErrMissingIdempotencyKey),
+		errors.Is(err, valueobject.ErrEmptyIdempotencyKey),
+		errors.Is(err, valueobject.ErrInvalidIdempotencyKey):
+		return codes.InvalidArgument
+	default:
+		return codes.Internal
 	}
 }
 

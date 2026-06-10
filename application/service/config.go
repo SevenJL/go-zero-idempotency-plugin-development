@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
 	domainservice "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/service"
 )
@@ -22,6 +23,12 @@ type Config struct {
 	Clock         port.Clock
 
 	Policy domainservice.IdempotencyPolicy
+
+	// FailureMode is used when AbortCommand.Mode is omitted.
+	FailureMode model.FailureMode
+
+	// StorageFailureMode controls Begin behaviour when storage returns an error.
+	StorageFailureMode domainservice.StorageFailureMode
 
 	WaitTimeout  time.Duration
 	WaitInterval time.Duration
@@ -59,6 +66,12 @@ func (c Config) normalized() Config {
 		c.Clock = SystemClock{}
 	}
 	c.Policy = domainservice.NewIdempotencyPolicy(c.Policy.DuplicatePolicy, c.Policy.TTL)
+	if c.FailureMode == "" {
+		c.FailureMode = model.FailureModeDelete
+	}
+	if c.StorageFailureMode == "" {
+		c.StorageFailureMode = domainservice.StorageFailureFailClosed
+	}
 	c.CaptureRules = domainservice.NewCaptureRules(c.CaptureRules)
 	if c.WaitTimeout <= 0 {
 		c.WaitTimeout = 5 * time.Second

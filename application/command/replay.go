@@ -8,5 +8,6 @@ import (
 
 type ReplayCommand struct {
 	Key      valueobject.IdempotencyKey
+	Scope    valueobject.Scope
 	Deadline time.Time
 }

@@ -41,6 +41,26 @@ func (f fixedOwnerFactory) NewOwner(context.Context) (valueobject.Owner, error) 
 	return f.owner, nil
 }
 
+type failingRepository struct{}
+
+func (failingRepository) TryBegin(context.Context, *model.IdempotencyRecord) (model.BeginDecision, error) {
+	return model.BeginDecision{}, errors.New("storage down")
+}
+
+func (failingRepository) Commit(context.Context, *model.IdempotencyRecord) error { return nil }
+
+func (failingRepository) Abort(context.Context, valueobject.IdempotencyKey, valueobject.Owner, model.FailureMode) error {
+	return nil
+}
+
+func (failingRepository) Find(context.Context, valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
+	return nil, nil
+}
+
+func (failingRepository) Renew(context.Context, valueobject.IdempotencyKey, valueobject.Owner, time.Duration) error {
+	return nil
+}
+
 // ---- Lifecycle edge cases ----
 
 func TestIdempotencyServiceDisabled(t *testing.T) {
@@ -496,10 +516,115 @@ func TestIdempotencyServiceDuplicatePassThrough(t *testing.T) {
 		t.Fatalf("first Begin() type = %s, want %s", first.Type, dto.BeginResultAcquired)
 	}
 
-	// With pass_through, concurrent requests get InProgress without waiting.
+	// With pass_through, concurrent requests execute without idempotency capture.
 	second := beginOrder(t, svc, ctx, []byte(`{"sku":"A"}`))
-	if second.Type != dto.BeginResultInProgress {
-		t.Fatalf("second Begin() type = %s, want %s", second.Type, dto.BeginResultInProgress)
+	if second.Type != dto.BeginResultPassThrough {
+		t.Fatalf("second Begin() type = %s, want %s", second.Type, dto.BeginResultPassThrough)
+	}
+}
+
+func TestIdempotencyServiceStorageFailOpenPassThrough(t *testing.T) {
+	ctx := context.Background()
+	clock := &fixedClock{now: time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)}
+	svc, err := appservice.NewIdempotencyService(appservice.Config{
+		Scope:              "order-api",
+		Repository:         failingRepository{},
+		Clock:              clock,
+		OwnerFactory:       fixedOwnerFactory{owner: valueobject.UnsafeOwner("owner-1")},
+		StorageFailureMode: domainservice.StorageFailureFailOpen,
+	})
+	if err != nil {
+		t.Fatalf("NewIdempotencyService() error = %v", err)
+	}
+
+	result := beginOrder(t, svc, ctx, []byte(`{"sku":"A"}`))
+	if result.Type != dto.BeginResultPassThrough {
+		t.Fatalf("Begin() type = %s, want %s", result.Type, dto.BeginResultPassThrough)
+	}
+}
+
+func TestIdempotencyServiceConfiguredFailureModeCache(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
+	clock := &fixedClock{now: now}
+	repo := memory.NewIdempotencyRecordRepository(memory.WithClock(clock.Now))
+	svc, err := appservice.NewIdempotencyService(appservice.Config{
+		Scope:        "order-api",
+		Repository:   repo,
+		Clock:        clock,
+		OwnerFactory: fixedOwnerFactory{owner: valueobject.UnsafeOwner("owner-1")},
+		FailureMode:  model.FailureModeCache,
+	})
+	if err != nil {
+		t.Fatalf("NewIdempotencyService() error = %v", err)
+	}
+
+	begin := beginOrder(t, svc, ctx, []byte(`{"sku":"A"}`))
+	if err := svc.Abort(ctx, command.AbortCommand{
+		Key:          begin.Key,
+		Fingerprint:  begin.Fingerprint,
+		Owner:        begin.Owner,
+		ErrorCode:    "DOWNSTREAM",
+		ErrorMessage: "failed",
+		Now:          now.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+
+	replay := beginOrder(t, svc, ctx, []byte(`{"sku":"A"}`))
+	if replay.Type != dto.BeginResultFailed {
+		t.Fatalf("second Begin() type = %s, want %s", replay.Type, dto.BeginResultFailed)
+	}
+	if replay.ErrorCode != "DOWNSTREAM" {
+		t.Fatalf("ErrorCode = %q, want DOWNSTREAM", replay.ErrorCode)
+	}
+}
+
+func TestConfigFileKeyLengthLimitsAreApplied(t *testing.T) {
+	ctx := context.Background()
+	clock := &fixedClock{now: time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)}
+	repo := memory.NewIdempotencyRecordRepository(memory.WithClock(clock.Now))
+	required := true
+	cfg, err := appservice.ConfigFile{
+		Key: appservice.KeyConfig{
+			Required:  &required,
+			MinLength: 3,
+			MaxLength: 5,
+		},
+	}.ToServiceConfig(repo, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("ToServiceConfig() error = %v", err)
+	}
+	cfg.Clock = clock
+	cfg.OwnerFactory = fixedOwnerFactory{owner: valueobject.UnsafeOwner("owner-1")}
+	svc, err := appservice.NewIdempotencyService(cfg)
+	if err != nil {
+		t.Fatalf("NewIdempotencyService() error = %v", err)
+	}
+
+	result, err := svc.Begin(ctx, command.BeginCommand{
+		Request: dto.RequestContext{
+			Operation: valueobject.UnsafeOperation("POST /orders"),
+			Headers:   map[string][]string{"Idempotency-Key": {"abc"}},
+			Body:      []byte(`{"sku":"A"}`),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Begin(short configured key) error = %v", err)
+	}
+	if result.Type != dto.BeginResultAcquired {
+		t.Fatalf("Begin() type = %s, want %s", result.Type, dto.BeginResultAcquired)
+	}
+
+	_, err = svc.Begin(ctx, command.BeginCommand{
+		Request: dto.RequestContext{
+			Operation: valueobject.UnsafeOperation("POST /orders"),
+			Headers:   map[string][]string{"Idempotency-Key": {"abcdef"}},
+			Body:      []byte(`{"sku":"A"}`),
+		},
+	})
+	if !errors.Is(err, valueobject.ErrInvalidIdempotencyKey) {
+		t.Fatalf("Begin(long configured key) error = %v, want ErrInvalidIdempotencyKey", err)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 type Heartbeat struct {
 	repo     repository.IdempotencyRecordRepository
 	key      valueobject.IdempotencyKey
+	scope    valueobject.Scope
 	owner    valueobject.Owner
 	ttl      time.Duration
 	interval time.Duration
@@ -32,6 +33,7 @@ type Heartbeat struct {
 type HeartbeatConfig struct {
 	Repo     repository.IdempotencyRecordRepository
 	Key      valueobject.IdempotencyKey
+	Scope    valueobject.Scope
 	Owner    valueobject.Owner
 	TTL      time.Duration // the TTL to set on each renewal (typically ProcessingTTL)
 	Interval time.Duration // how often to renew; zero means TTL/2
@@ -47,6 +49,7 @@ func NewHeartbeat(cfg HeartbeatConfig) *Heartbeat {
 	return &Heartbeat{
 		repo:     cfg.Repo,
 		key:      cfg.Key,
+		scope:    cfg.Scope,
 		owner:    cfg.Owner,
 		ttl:      cfg.TTL,
 		interval: interval,
@@ -84,7 +87,7 @@ func (h *Heartbeat) loop() {
 		case <-h.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := h.repo.Renew(h.ctx, h.key, h.owner, h.ttl); err != nil {
+			if err := repository.Renew(h.ctx, h.repo, h.key, h.scope, h.owner, h.ttl); err != nil {
 				log.Printf("idempotency: heartbeat renew failed for key %s: %v", h.key.String(), err)
 			}
 		}

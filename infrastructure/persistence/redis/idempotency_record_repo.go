@@ -5,6 +5,8 @@ package redis
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -12,13 +14,14 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
+	domainrepo "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // ErrBreakerOpen is returned when the circuit breaker is open and the
 // storage failure mode is fail_open. Callers can use errors.Is to detect
 // this condition and choose to pass through to the business handler.
-var ErrBreakerOpen = errors.New("redis: circuit breaker open")
+var ErrBreakerOpen = fmt.Errorf("redis: circuit breaker open: %w", domainrepo.ErrStoragePassThrough)
 
 // redisClient is the subset of go-zero's *redis.Redis that this
 // repository needs. It matches the methods on redis.RedisNode.
@@ -40,11 +43,11 @@ type IdempotencyRecordRepository struct {
 	notifier  *PubSubNotifier // nil means no pub/sub notifications
 
 	// Pending breaker config — used to accumulate settings before construction.
-	breakerMode      storageFailureMode
-	breakerFailures  int
-	breakerCooldown  time.Duration
-	breakerModeSet   bool
-	breakerDisabled  bool
+	breakerMode     storageFailureMode
+	breakerFailures int
+	breakerCooldown time.Duration
+	breakerModeSet  bool
+	breakerDisabled bool
 }
 
 // RepositoryOption configures the Redis repository.
@@ -208,6 +211,10 @@ func (r *IdempotencyRecordRepository) redisKey(key string) string {
 	return fmt.Sprintf("%s:%s", r.keyPrefix, key)
 }
 
+func (r *IdempotencyRecordRepository) redisScopedKey(key string, scope valueobject.Scope) string {
+	return r.redisKey(scopedStorageKey(key, scope))
+}
+
 // TryBegin implements repository.IdempotencyRecordRepository.
 func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *model.IdempotencyRecord) (model.BeginDecision, error) {
 	if err := r.breakerAllow(); err != nil {
@@ -220,7 +227,7 @@ func (r *IdempotencyRecordRepository) TryBegin(ctx context.Context, record *mode
 		return model.BeginDecision{}, fmt.Errorf("redis: marshal record: %w", err)
 	}
 
-	storeKey := r.redisKey(record.Key().String())
+	storeKey := r.redisScopedKey(record.Key().String(), record.Scope())
 	ttl := int(record.ExpiresAt().Sub(record.CreatedAt()).Seconds())
 	if ttl <= 0 {
 		ttl = 30
@@ -282,7 +289,7 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 		return fmt.Errorf("redis: marshal record: %w", err)
 	}
 
-	storeKey := r.redisKey(record.Key().String())
+	storeKey := r.redisScopedKey(record.Key().String(), record.Scope())
 	ttl := int(time.Until(record.ExpiresAt()).Seconds())
 	if ttl <= 0 {
 		ttl = 86400
@@ -317,11 +324,15 @@ func (r *IdempotencyRecordRepository) Commit(ctx context.Context, record *model.
 
 // Abort implements repository.IdempotencyRecordRepository.
 func (r *IdempotencyRecordRepository) Abort(ctx context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, mode model.FailureMode) error {
+	return r.AbortScoped(ctx, key, valueobject.Scope{}, owner, mode)
+}
+
+func (r *IdempotencyRecordRepository) AbortScoped(ctx context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope, owner valueobject.Owner, mode model.FailureMode) error {
 	if err := r.breakerAllow(); err != nil {
 		return err
 	}
 
-	storeKey := r.redisKey(key.String())
+	storeKey := r.redisScopedKey(key.String(), scope)
 
 	var recordJSON string
 	var failedTTL int
@@ -356,11 +367,15 @@ func (r *IdempotencyRecordRepository) Abort(ctx context.Context, key valueobject
 
 // Find implements repository.IdempotencyRecordRepository.
 func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.IdempotencyKey) (*model.IdempotencyRecord, error) {
+	return r.FindScoped(ctx, key, valueobject.Scope{})
+}
+
+func (r *IdempotencyRecordRepository) FindScoped(ctx context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope) (*model.IdempotencyRecord, error) {
 	if err := r.breakerAllow(); err != nil {
 		return nil, err
 	}
 
-	storeKey := r.redisKey(key.String())
+	storeKey := r.redisScopedKey(key.String(), scope)
 	data, err := r.client.GetCtx(ctx, storeKey)
 	if err != nil {
 		// goredis.Nil means the key simply does not exist — not a storage error.
@@ -382,11 +397,15 @@ func (r *IdempotencyRecordRepository) Find(ctx context.Context, key valueobject.
 
 // Renew implements repository.IdempotencyRecordRepository.
 func (r *IdempotencyRecordRepository) Renew(ctx context.Context, key valueobject.IdempotencyKey, owner valueobject.Owner, ttl time.Duration) error {
+	return r.RenewScoped(ctx, key, valueobject.Scope{}, owner, ttl)
+}
+
+func (r *IdempotencyRecordRepository) RenewScoped(ctx context.Context, key valueobject.IdempotencyKey, scope valueobject.Scope, owner valueobject.Owner, ttl time.Duration) error {
 	if err := r.breakerAllow(); err != nil {
 		return err
 	}
 
-	storeKey := r.redisKey(key.String())
+	storeKey := r.redisScopedKey(key.String(), scope)
 	seconds := int(ttl.Seconds())
 	if seconds <= 0 {
 		seconds = 30
@@ -411,4 +430,12 @@ func (r *IdempotencyRecordRepository) Renew(ctx context.Context, key valueobject
 	default:
 		return fmt.Errorf("redis: unexpected renew result: %s", luaResult(result))
 	}
+}
+
+func scopedStorageKey(key string, scope valueobject.Scope) string {
+	if scope.IsZero() {
+		return key
+	}
+	sum := sha256.Sum256([]byte(scope.Service() + "\x00" + scope.Tenant() + "\x00" + scope.User()))
+	return key + ":scope:" + hex.EncodeToString(sum[:8])
 }

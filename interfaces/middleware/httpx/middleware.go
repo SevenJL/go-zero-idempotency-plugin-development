@@ -5,6 +5,7 @@ package httpx
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -20,10 +21,11 @@ import (
 type Option func(*options)
 
 type options struct {
-	skipMethods     map[string]bool
-	heartbeatConfig *appservice.HeartbeatConfig
-	maxBodyBytes    int64
-	logger          port.Logger
+	skipMethods          map[string]bool
+	heartbeatConfig      *appservice.HeartbeatConfig
+	maxBodyBytes         int64
+	maxResponseBodyBytes int64
+	logger               port.Logger
 }
 
 func newOptions() *options {
@@ -33,8 +35,9 @@ func newOptions() *options {
 			http.MethodHead:    true,
 			http.MethodOptions: true,
 		},
-		maxBodyBytes: 1 << 20, // 1 MB default
-		logger:       port.NoopLogger(),
+		maxBodyBytes:         1 << 20, // 1 MB default
+		maxResponseBodyBytes: 1 << 20,
+		logger:               port.NoopLogger(),
 	}
 }
 
@@ -63,6 +66,16 @@ func WithHeartbeat(cfg appservice.HeartbeatConfig) Option {
 func WithMaxBodyBytes(n int64) Option {
 	return func(o *options) {
 		o.maxBodyBytes = n
+	}
+}
+
+// WithMaxResponseBodyBytes limits how many response bytes are buffered for
+// replay. The response is still forwarded to the client in full; when the
+// limit is exceeded, the idempotency record is not cached. Defaults to 1 MB.
+// Set to 0 to disable the capture limit.
+func WithMaxResponseBodyBytes(n int64) Option {
+	return func(o *options) {
+		o.maxResponseBodyBytes = n
 	}
 }
 
@@ -136,12 +149,12 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 					port.Field{Key: "method", Value: r.Method},
 					port.Field{Key: "path", Value: r.URL.Path},
 				)
-				http.Error(w, "idempotency error", http.StatusInternalServerError)
+				http.Error(w, "idempotency error", beginErrorStatus(err))
 				return
 			}
 
 			switch beginResult.Type {
-			case dto.BeginResultSkipped:
+			case dto.BeginResultSkipped, dto.BeginResultPassThrough:
 				next.ServeHTTP(w, r)
 
 			case dto.BeginResultAcquired:
@@ -150,24 +163,32 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 				if o.heartbeatConfig != nil {
 					cfg := *o.heartbeatConfig
 					cfg.Key = beginResult.Key
+					cfg.Scope = beginResult.Scope
 					cfg.Owner = beginResult.Owner
 					hb = appservice.NewHeartbeat(cfg)
 					ctx = hb.Start(ctx)
 				}
 
-				crw := newCaptureResponseWriter(w)
+				crw := newCaptureResponseWriter(w, o.maxResponseBodyBytes)
 				if hb != nil {
 					defer hb.Stop()
 				}
 				next.ServeHTTP(crw, r.WithContext(ctx))
 
 				resp := crw.CapturedResponse()
-				_ = svc.Complete(ctx, command.CompleteCommand{
+				if err := svc.Complete(ctx, command.CompleteCommand{
 					Key:         beginResult.Key,
 					Fingerprint: beginResult.Fingerprint,
 					Owner:       beginResult.Owner,
+					Scope:       beginResult.Scope,
 					Response:    resp,
-				})
+				}); err != nil {
+					o.logger.Error(ctx, "idempotency complete error",
+						port.Field{Key: "error", Value: err.Error()},
+						port.Field{Key: "method", Value: r.Method},
+						port.Field{Key: "path", Value: r.URL.Path},
+					)
+				}
 
 			case dto.BeginResultReplay:
 				writeReplayResponse(w, beginResult)
@@ -182,6 +203,17 @@ func Middleware(svc *appservice.IdempotencyService, opts ...Option) func(http.Ha
 				writeReplayResponse(w, beginResult)
 			}
 		})
+	}
+}
+
+func beginErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, appservice.ErrMissingIdempotencyKey),
+		errors.Is(err, valueobject.ErrEmptyIdempotencyKey),
+		errors.Is(err, valueobject.ErrInvalidIdempotencyKey):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
 	}
 }
 

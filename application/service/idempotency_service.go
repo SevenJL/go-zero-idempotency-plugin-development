@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/command"
@@ -32,6 +33,8 @@ type IdempotencyService struct {
 
 	policy       domainservice.IdempotencyPolicy
 	captureRules domainservice.CaptureRules
+	failureMode  model.FailureMode
+	storageMode  domainservice.StorageFailureMode
 	waitTimeout  time.Duration
 	waitInterval time.Duration
 
@@ -39,6 +42,8 @@ type IdempotencyService struct {
 	metrics  port.Metrics
 	tracer   port.Tracer
 	notifier port.Notifier
+
+	scopes sync.Map
 }
 
 func NewIdempotencyService(config Config) (*IdempotencyService, error) {
@@ -57,6 +62,8 @@ func NewIdempotencyService(config Config) (*IdempotencyService, error) {
 		clock:         config.Clock,
 		policy:        config.Policy,
 		captureRules:  config.CaptureRules,
+		failureMode:   config.FailureMode,
+		storageMode:   config.StorageFailureMode,
 		waitTimeout:   config.WaitTimeout,
 		waitInterval:  config.WaitInterval,
 		logger:        config.Logger,
@@ -128,14 +135,21 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 
 	decision, err := s.repo.TryBegin(ctx, record)
 	if err != nil {
+		if s.shouldPassThroughStorageError(err) {
+			return s.passThroughResult(key, fingerprint, owner, req.Scope), nil
+		}
 		return dto.BeginResult{}, fmt.Errorf("begin: try begin: %w", err)
 	}
 	if decision.Type == model.DecisionInProgress && s.policy.ShouldWaitDuplicate() && decision.Record != nil {
 		replay, err := s.WaitReplay(ctx, command.ReplayCommand{
 			Key:      decision.Record.Key(),
+			Scope:    decision.Record.Scope(),
 			Deadline: now.Add(s.waitTimeout),
 		})
 		if err != nil {
+			if s.shouldPassThroughStorageError(err) {
+				return s.passThroughResult(key, fingerprint, owner, req.Scope), nil
+			}
 			return dto.BeginResult{}, fmt.Errorf("begin: wait replay: %w", err)
 		}
 		if replay.Found {
@@ -156,13 +170,16 @@ func (s *IdempotencyService) Begin(ctx context.Context, cmd command.BeginCommand
 			}
 			decision, err = s.repo.TryBegin(ctx, refreshed)
 			if err != nil {
+				if s.shouldPassThroughStorageError(err) {
+					return s.passThroughResult(key, fingerprint, owner, req.Scope), nil
+				}
 				return dto.BeginResult{}, fmt.Errorf("begin: try begin (retry): %w", err)
 			}
-			return s.toBeginResult(key, fingerprint, owner, decision), nil
+			return s.toBeginResult(key, fingerprint, owner, req.Scope, decision), nil
 		}
 	}
 
-	return s.toBeginResult(key, fingerprint, owner, decision), nil
+	return s.toBeginResult(key, fingerprint, owner, req.Scope, decision), nil
 }
 
 // Complete finalises a successfully processed idempotent operation. It stores
@@ -184,7 +201,8 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	}
 
 	// Find the record first — if it doesn't exist, fail early.
-	record, err := s.repo.Find(ctx, cmd.Key)
+	scope := s.commandScope(cmd.Key, cmd.Owner, cmd.Scope)
+	record, err := repository.Find(ctx, s.repo, cmd.Key, scope)
 	if err != nil {
 		s.logger.Error(ctx, "idempotency complete find failed",
 			port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
@@ -201,14 +219,15 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	// Consult capture policy. If the response should not be cached, auto-abort
 	// instead of completing. This keeps the domain model clean — the domain
 	// aggregate does not need to know about HTTP status-code conventions.
-	if !s.captureRules.ShouldCache(resp.StatusCode, contentType(resp.Headers), int64(len(resp.Body))) {
-		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, model.FailureModeDelete); err != nil {
+	if resp.BodyTruncated || !s.captureRules.ShouldCache(resp.StatusCode, contentType(resp.Headers), int64(len(resp.Body))) {
+		if err := repository.Abort(ctx, s.repo, cmd.Key, scope, cmd.Owner, model.FailureModeDelete); err != nil {
 			s.logger.Error(ctx, "idempotency abort (not cacheable) failed",
 				port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
 				port.Field{Key: "error", Value: err.Error()},
 			)
 			return fmt.Errorf("complete: abort (not cacheable): %w", err)
 		}
+		s.forgetScope(cmd.Key, cmd.Owner)
 		return nil
 	}
 
@@ -228,6 +247,7 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 	}
 
 	s.metrics.CounterIncrementContext(ctx, "idempotency_commit_total", map[string]string{"result": "success"})
+	s.forgetScope(cmd.Key, cmd.Owner)
 	return nil
 }
 
@@ -245,16 +265,18 @@ func (s *IdempotencyService) Complete(ctx context.Context, cmd command.CompleteC
 func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand) error {
 	mode := cmd.Mode
 	if mode == "" {
-		mode = model.FailureModeDelete
+		mode = s.failureMode
 	}
+	scope := s.commandScope(cmd.Key, cmd.Owner, cmd.Scope)
 	if mode == model.FailureModeDelete || mode == model.FailureModeKeepProcessingTTL {
-		if err := s.repo.Abort(ctx, cmd.Key, cmd.Owner, mode); err != nil {
+		if err := repository.Abort(ctx, s.repo, cmd.Key, scope, cmd.Owner, mode); err != nil {
 			s.logger.Error(ctx, "idempotency abort failed",
 				port.Field{Key: "key_hash", Value: hashKey(cmd.Key.String())},
 				port.Field{Key: "error", Value: err.Error()},
 			)
 			return fmt.Errorf("abort: %w", err)
 		}
+		s.forgetScope(cmd.Key, cmd.Owner)
 		return nil
 	}
 
@@ -263,7 +285,7 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 		now = s.clock.Now()
 	}
 
-	record, err := s.repo.Find(ctx, cmd.Key)
+	record, err := repository.Find(ctx, s.repo, cmd.Key, scope)
 	if err != nil {
 		return fmt.Errorf("abort: find: %w", err)
 	}
@@ -276,6 +298,7 @@ func (s *IdempotencyService) Abort(ctx context.Context, cmd command.AbortCommand
 	if err := s.repo.Commit(ctx, record); err != nil {
 		return fmt.Errorf("abort: commit: %w", err)
 	}
+	s.forgetScope(cmd.Key, cmd.Owner)
 	return nil
 }
 
@@ -298,17 +321,18 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 	}
 
 	// Check initial state
-	record, err := s.repo.Find(ctx, cmd.Key)
+	record, err := repository.Find(ctx, s.repo, cmd.Key, cmd.Scope)
 	if err != nil {
 		return dto.ReplayResult{}, fmt.Errorf("wait replay: find: %w", err)
 	}
 	if record == nil {
-		return dto.ReplayResult{Found: false, Key: cmd.Key}, nil
+		return dto.ReplayResult{Found: false, Key: cmd.Key, Scope: cmd.Scope}, nil
 	}
 	if record.Status() == model.StatusCompleted || record.Status() == model.StatusFailed {
 		return dto.ReplayResult{
 			Found:        true,
 			Key:          cmd.Key,
+			Scope:        record.Scope(),
 			Record:       record,
 			Response:     fromDomainResponse(record.Response()),
 			ErrorCode:    record.ErrorCode(),
@@ -334,7 +358,7 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 			return // context cancelled or deadline exceeded
 		}
 		_ = msg // message signals state change; we re-check the record below
-		record, err := s.repo.Find(ctx, cmd.Key)
+		record, err := repository.Find(notifyCtx, s.repo, cmd.Key, cmd.Scope)
 		if err != nil {
 			return
 		}
@@ -346,6 +370,7 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 			case notifyCh <- dto.ReplayResult{
 				Found:        true,
 				Key:          cmd.Key,
+				Scope:        record.Scope(),
 				Record:       record,
 				Response:     fromDomainResponse(record.Response()),
 				ErrorCode:    record.ErrorCode(),
@@ -371,17 +396,18 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 		default:
 		}
 
-		record, err := s.repo.Find(ctx, cmd.Key)
+		record, err := repository.Find(ctx, s.repo, cmd.Key, cmd.Scope)
 		if err != nil {
 			return dto.ReplayResult{}, fmt.Errorf("wait replay: poll: %w", err)
 		}
 		if record == nil {
-			return dto.ReplayResult{Found: false, Key: cmd.Key}, nil
+			return dto.ReplayResult{Found: false, Key: cmd.Key, Scope: cmd.Scope}, nil
 		}
 		if record.Status() == model.StatusCompleted || record.Status() == model.StatusFailed {
 			return dto.ReplayResult{
 				Found:        true,
 				Key:          cmd.Key,
+				Scope:        record.Scope(),
 				Record:       record,
 				Response:     fromDomainResponse(record.Response()),
 				ErrorCode:    record.ErrorCode(),
@@ -390,7 +416,7 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 		}
 		now := s.clock.Now()
 		if !now.Before(deadline) {
-			return dto.ReplayResult{Found: false, Key: cmd.Key, Record: record}, nil
+			return dto.ReplayResult{Found: false, Key: cmd.Key, Scope: cmd.Scope, Record: record}, nil
 		}
 		sleepFor := s.waitInterval
 		if remaining := deadline.Sub(now); remaining < sleepFor {
@@ -400,17 +426,22 @@ func (s *IdempotencyService) WaitReplay(ctx context.Context, cmd command.ReplayC
 	}
 }
 
-func (s *IdempotencyService) toBeginResult(key valueobject.IdempotencyKey, fingerprint valueobject.Fingerprint, owner valueobject.Owner, decision model.BeginDecision) dto.BeginResult {
+func (s *IdempotencyService) toBeginResult(key valueobject.IdempotencyKey, fingerprint valueobject.Fingerprint, owner valueobject.Owner, scope valueobject.Scope, decision model.BeginDecision) dto.BeginResult {
+	if scope.IsZero() && decision.Record != nil {
+		scope = decision.Record.Scope()
+	}
 	result := dto.BeginResult{
 		Key:         key,
 		Fingerprint: fingerprint,
 		Owner:       owner,
+		Scope:       scope,
 		Record:      decision.Record,
 	}
 
 	switch decision.Type {
 	case model.DecisionAcquired:
 		result.Type = dto.BeginResultAcquired
+		s.rememberScope(key, owner, scope)
 	case model.DecisionReplay:
 		result.Type = dto.BeginResultReplay
 		if decision.Record != nil {
@@ -419,7 +450,11 @@ func (s *IdempotencyService) toBeginResult(key valueobject.IdempotencyKey, finge
 	case model.DecisionConflict:
 		result.Type = dto.BeginResultConflict
 	case model.DecisionInProgress:
-		result.Type = dto.BeginResultInProgress
+		if s.policy.DuplicatePolicy == domainservice.DuplicatePassThrough {
+			result.Type = dto.BeginResultPassThrough
+		} else {
+			result.Type = dto.BeginResultInProgress
+		}
 	case model.DecisionFailed:
 		result.Type = dto.BeginResultFailed
 		if decision.Record != nil {
@@ -439,17 +474,76 @@ func beginResultFromReplay(key valueobject.IdempotencyKey, fingerprint valueobje
 	if replay.Record != nil && replay.Record.Status() == model.StatusFailed {
 		resultType = dto.BeginResultFailed
 	}
+	scope := replay.Scope
+	if scope.IsZero() && replay.Record != nil {
+		scope = replay.Record.Scope()
+	}
 
 	return dto.BeginResult{
 		Type:         resultType,
 		Key:          key,
 		Fingerprint:  fingerprint,
 		Owner:        owner,
+		Scope:        scope,
 		Record:       replay.Record,
 		Response:     replay.Response,
 		ErrorCode:    replay.ErrorCode,
 		ErrorMessage: replay.ErrorMessage,
 	}
+}
+
+func (s *IdempotencyService) passThroughResult(key valueobject.IdempotencyKey, fingerprint valueobject.Fingerprint, owner valueobject.Owner, scope valueobject.Scope) dto.BeginResult {
+	return dto.BeginResult{
+		Type:        dto.BeginResultPassThrough,
+		Key:         key,
+		Fingerprint: fingerprint,
+		Owner:       owner,
+		Scope:       scope,
+	}
+}
+
+func (s *IdempotencyService) shouldPassThroughStorageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	return errors.Is(err, repository.ErrStoragePassThrough) ||
+		s.storageMode == domainservice.StorageFailureFailOpen
+}
+
+func (s *IdempotencyService) rememberScope(key valueobject.IdempotencyKey, owner valueobject.Owner, scope valueobject.Scope) {
+	if key.IsZero() || owner.IsZero() || scope.IsZero() {
+		return
+	}
+	s.scopes.Store(scopeCacheKey(key, owner), scope)
+}
+
+func (s *IdempotencyService) forgetScope(key valueobject.IdempotencyKey, owner valueobject.Owner) {
+	if key.IsZero() || owner.IsZero() {
+		return
+	}
+	s.scopes.Delete(scopeCacheKey(key, owner))
+}
+
+func (s *IdempotencyService) commandScope(key valueobject.IdempotencyKey, owner valueobject.Owner, explicit valueobject.Scope) valueobject.Scope {
+	if !explicit.IsZero() {
+		return explicit
+	}
+	if key.IsZero() || owner.IsZero() {
+		return valueobject.Scope{}
+	}
+	if v, ok := s.scopes.Load(scopeCacheKey(key, owner)); ok {
+		if scope, ok := v.(valueobject.Scope); ok {
+			return scope
+		}
+	}
+	return valueobject.Scope{}
+}
+
+func scopeCacheKey(key valueobject.IdempotencyKey, owner valueobject.Owner) string {
+	return key.String() + "\x00" + owner.String()
 }
 
 func toDomainResponse(response dto.CapturedResponse) model.CapturedResponse {

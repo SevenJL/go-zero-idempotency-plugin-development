@@ -48,6 +48,55 @@ func TestMiddlewareRejectsBodyAboveConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestMiddlewareMissingKeyReturnsBadRequest(t *testing.T) {
+	svc := newHTTPXTestService(t)
+	called := false
+	handler := Middleware(svc)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"sku":"A"}`))
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", resp.Code, http.StatusBadRequest)
+	}
+	if called {
+		t.Fatal("handler should not be called when idempotency key is missing")
+	}
+}
+
+func TestMiddlewareOversizedCapturedResponseIsNotReplayed(t *testing.T) {
+	svc := newHTTPXTestService(t)
+	calls := 0
+	handler := Middleware(svc, WithMaxResponseBodyBytes(4))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/orders", strings.NewReader(`{"sku":"A"}`))
+		req.Header.Set("Idempotency-Key", "httpx-key-0000000003")
+		resp := httptest.NewRecorder()
+
+		handler.ServeHTTP(resp, req)
+
+		if resp.Code != http.StatusOK {
+			t.Fatalf("request %d status = %d, want %d", i+1, resp.Code, http.StatusOK)
+		}
+		if resp.Header().Get("Idempotency-Replayed") != "" {
+			t.Fatalf("request %d should not be replayed", i+1)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("handler calls = %d, want 2", calls)
+	}
+}
+
 func newHTTPXTestService(t *testing.T) *appservice.IdempotencyService {
 	t.Helper()
 	svc, err := appservice.NewIdempotencyService(appservice.Config{

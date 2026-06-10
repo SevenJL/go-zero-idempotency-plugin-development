@@ -11,16 +11,19 @@ import (
 // headers, and body for idempotency replay.
 type captureResponseWriter struct {
 	http.ResponseWriter
-	statusCode  int
-	headers     http.Header
-	body        bytes.Buffer
-	wroteHeader bool
+	statusCode    int
+	headers       http.Header
+	body          bytes.Buffer
+	maxBodyBytes  int64
+	bodyTruncated bool
+	wroteHeader   bool
 }
 
-func newCaptureResponseWriter(w http.ResponseWriter) *captureResponseWriter {
+func newCaptureResponseWriter(w http.ResponseWriter, maxBodyBytes int64) *captureResponseWriter {
 	return &captureResponseWriter{
 		ResponseWriter: w,
 		headers:        make(http.Header),
+		maxBodyBytes:   maxBodyBytes,
 	}
 }
 
@@ -42,7 +45,7 @@ func (w *captureResponseWriter) Write(b []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	// Capture body for replay.
-	w.body.Write(b)
+	w.captureBody(b)
 	return w.ResponseWriter.Write(b)
 }
 
@@ -66,10 +69,32 @@ func (w *captureResponseWriter) CapturedResponse() dto.CapturedResponse {
 	}
 
 	return dto.CapturedResponse{
-		StatusCode: code,
-		Headers:    headers,
-		Body:       copySlice(w.body.Bytes()),
+		StatusCode:    code,
+		Headers:       headers,
+		Body:          copySlice(w.body.Bytes()),
+		BodyTruncated: w.bodyTruncated,
 	}
+}
+
+func (w *captureResponseWriter) captureBody(b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	if w.maxBodyBytes <= 0 {
+		w.body.Write(b)
+		return
+	}
+	remaining := w.maxBodyBytes - int64(w.body.Len())
+	if remaining <= 0 {
+		w.bodyTruncated = true
+		return
+	}
+	if int64(len(b)) > remaining {
+		w.body.Write(b[:int(remaining)])
+		w.bodyTruncated = true
+		return
+	}
+	w.body.Write(b)
 }
 
 func copyHeaders(dst, src http.Header) {

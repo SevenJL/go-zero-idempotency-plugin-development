@@ -3,6 +3,7 @@ package gin
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -15,7 +16,54 @@ import (
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
-const maxBodyBytes = 1 << 20 // 1 MB
+type Option func(*options)
+
+type options struct {
+	skipMethods          map[string]bool
+	heartbeatConfig      *appservice.HeartbeatConfig
+	maxBodyBytes         int64
+	maxResponseBodyBytes int64
+}
+
+func newOptions() *options {
+	return &options{
+		skipMethods: map[string]bool{
+			http.MethodGet:     true,
+			http.MethodHead:    true,
+			http.MethodOptions: true,
+		},
+		maxBodyBytes:         1 << 20,
+		maxResponseBodyBytes: 1 << 20,
+	}
+}
+
+func WithSkipMethods(methods ...string) Option {
+	return func(o *options) {
+		o.skipMethods = make(map[string]bool)
+		for _, method := range methods {
+			o.skipMethods[method] = true
+		}
+	}
+}
+
+func WithHeartbeat(cfg appservice.HeartbeatConfig) Option {
+	return func(o *options) {
+		cfgCopy := cfg
+		o.heartbeatConfig = &cfgCopy
+	}
+}
+
+func WithMaxBodyBytes(n int64) Option {
+	return func(o *options) {
+		o.maxBodyBytes = n
+	}
+}
+
+func WithMaxResponseBodyBytes(n int64) Option {
+	return func(o *options) {
+		o.maxResponseBodyBytes = n
+	}
+}
 
 // Middleware returns a gin.HandlerFunc that provides idempotency protection.
 //
@@ -23,10 +71,15 @@ const maxBodyBytes = 1 << 20 // 1 MB
 //
 //	r := gin.New()
 //	r.Use(ginidem.Middleware(idemSvc))
-func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
+func Middleware(svc *appservice.IdempotencyService, opts ...Option) gin.HandlerFunc {
+	o := newOptions()
+	for _, opt := range opts {
+		opt(o)
+	}
+
 	return func(c *gin.Context) {
 		// Skip read-only methods.
-		if isReadOnlyMethod(c.Request.Method) {
+		if o.skipMethods[c.Request.Method] {
 			c.Next()
 			return
 		}
@@ -35,14 +88,18 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 		// Use a bounded reader to prevent OOM from oversized request bodies.
 		var bodyBytes []byte
 		if c.Request.Body != nil {
-			limited := io.LimitReader(c.Request.Body, maxBodyBytes+1) // +1 to detect overflow
+			maxBytes := o.maxBodyBytes
+			reader := io.Reader(c.Request.Body)
+			if maxBytes > 0 {
+				reader = io.LimitReader(c.Request.Body, maxBytes+1) // +1 to detect overflow
+			}
 			var err error
-			bodyBytes, err = io.ReadAll(limited)
+			bodyBytes, err = io.ReadAll(reader)
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "request body read error"})
 				return
 			}
-			if int64(len(bodyBytes)) > maxBodyBytes {
+			if maxBytes > 0 && int64(len(bodyBytes)) > maxBytes {
 				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request body too large"})
 				return
 			}
@@ -65,17 +122,32 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 		beginResult, err := svc.Begin(c.Request.Context(), command.BeginCommand{Request: reqCtx})
 		if err != nil {
 			c.Error(err)
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "idempotency: internal error"})
+			c.AbortWithStatusJSON(beginErrorStatus(err), gin.H{"error": "idempotency: begin error"})
 			return
 		}
 
 		switch beginResult.Type {
-		case dto.BeginResultSkipped:
+		case dto.BeginResultSkipped, dto.BeginResultPassThrough:
 			c.Next()
 
 		case dto.BeginResultAcquired:
+			var hb *appservice.Heartbeat
+			ctx := c.Request.Context()
+			if o.heartbeatConfig != nil {
+				cfg := *o.heartbeatConfig
+				cfg.Key = beginResult.Key
+				cfg.Scope = beginResult.Scope
+				cfg.Owner = beginResult.Owner
+				hb = appservice.NewHeartbeat(cfg)
+				ctx = hb.Start(ctx)
+				c.Request = c.Request.WithContext(ctx)
+			}
+			if hb != nil {
+				defer hb.Stop()
+			}
+
 			// Wrap the response writer to capture the response.
-			crw := newGinResponseWriter(c.Writer)
+			crw := newGinResponseWriter(c.Writer, o.maxResponseBodyBytes)
 			c.Writer = crw
 
 			c.Next()
@@ -87,6 +159,7 @@ func Middleware(svc *appservice.IdempotencyService) gin.HandlerFunc {
 				Key:         beginResult.Key,
 				Fingerprint: beginResult.Fingerprint,
 				Owner:       beginResult.Owner,
+				Scope:       beginResult.Scope,
 				Response:    resp,
 			}); err != nil {
 				c.Error(err)
@@ -135,18 +208,21 @@ func writeReplayGin(c *gin.Context, result dto.BeginResult) {
 	c.Abort()
 }
 
-func isReadOnlyMethod(method string) bool {
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return true
-	}
-	return false
-}
-
 func isExcludedReplayHeader(name string) bool {
 	switch strings.ToLower(name) {
 	case "set-cookie", "authorization", "cookie", "www-authenticate":
 		return true
 	}
 	return false
+}
+
+func beginErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, appservice.ErrMissingIdempotencyKey),
+		errors.Is(err, valueobject.ErrEmptyIdempotencyKey),
+		errors.Is(err, valueobject.ErrInvalidIdempotencyKey):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
 }

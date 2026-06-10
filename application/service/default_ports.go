@@ -20,6 +20,8 @@ var ErrMissingIdempotencyKey = errors.New("idempotency key is missing")
 type HeaderKeyResolver struct {
 	HeaderName string
 	Required   bool
+	MinLength  int
+	MaxLength  int
 }
 
 func (r HeaderKeyResolver) Resolve(_ context.Context, request dto.RequestContext) (valueobject.IdempotencyKey, error) {
@@ -39,7 +41,15 @@ func (r HeaderKeyResolver) Resolve(_ context.Context, request dto.RequestContext
 		return valueobject.IdempotencyKey{}, nil
 	}
 
-	return valueobject.NewIdempotencyKey(value)
+	minLength := r.MinLength
+	if minLength <= 0 {
+		minLength = valueobject.DefaultMinKeyLength
+	}
+	maxLength := r.MaxLength
+	if maxLength <= 0 {
+		maxLength = valueobject.DefaultMaxKeyLength
+	}
+	return valueobject.NewIdempotencyKeyWithLimits(value, minLength, maxLength)
 }
 
 type SHA256Fingerprinter struct {

@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/application/port"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/model"
 	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/repository"
 	domainservice "github.com/sevenjl/go-zero-idempotency-plugin-development/domain/service"
+	"github.com/sevenjl/go-zero-idempotency-plugin-development/domain/valueobject"
 )
 
 // ConfigFile is the YAML-deserializable idempotency configuration.
@@ -177,8 +179,10 @@ func (f ConfigFile) ToServiceConfig(
 			CompletedTTL:  durationOrDefault(f.CompletedTTL, 24*time.Hour),
 			FailedTTL:     durationOrDefault(f.FailedTTL, 5*time.Minute),
 		}),
-		WaitTimeout:  durationOrDefault(f.WaitTimeout, 5*time.Second),
-		WaitInterval: durationOrDefault(f.WaitInterval, 50*time.Millisecond),
+		FailureMode:        failureModeOrDefault(f.FailureMode, model.FailureModeDelete),
+		StorageFailureMode: storageFailureModeOrDefault(f.StorageFailureMode, domainservice.StorageFailureFailClosed),
+		WaitTimeout:        durationOrDefault(f.WaitTimeout, 5*time.Second),
+		WaitInterval:       durationOrDefault(f.WaitInterval, 50*time.Millisecond),
 		CaptureRules: domainservice.NewCaptureRules(domainservice.CaptureRules{
 			CacheStatus2xx:  boolPtrOrDefault(f.Capture.CacheStatus2xx, true),
 			CacheStatus3xx:  f.Capture.CacheStatus3xx,
@@ -213,6 +217,8 @@ func (f ConfigFile) ToServiceConfig(
 	cfg.KeyResolver = HeaderKeyResolver{
 		HeaderName: headerName,
 		Required:   boolPtrOrDefault(f.Key.Required, true),
+		MinLength:  intOrDefault(f.Key.MinLength, valueobject.DefaultMinKeyLength),
+		MaxLength:  intOrDefault(f.Key.MaxLength, valueobject.DefaultMaxKeyLength),
 	}
 
 	return cfg, nil
@@ -265,6 +271,27 @@ func int64OrDefault(v, def int64) int64 {
 		return def
 	}
 	return v
+}
+
+func intOrDefault(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func failureModeOrDefault(v string, def model.FailureMode) model.FailureMode {
+	if v == "" {
+		return def
+	}
+	return model.FailureMode(v)
+}
+
+func storageFailureModeOrDefault(v string, def domainservice.StorageFailureMode) domainservice.StorageFailureMode {
+	if v == "" {
+		return def
+	}
+	return domainservice.StorageFailureMode(v)
 }
 
 // boolPtr returns a pointer to a bool. Useful for initialising *bool fields

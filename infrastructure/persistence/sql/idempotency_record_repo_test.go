@@ -31,7 +31,7 @@ func TestTryBeginDuplicateReturnsExistingDecision(t *testing.T) {
 		WithArgs(insertArgs(record, false)...).
 		WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM idempotency_records")).
-		WithArgs(record.Key().String(), record.Scope().Service()).
+		WithArgs(record.Key().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User()).
 		WillReturnRows(rowsFor(record))
 	mock.ExpectCommit()
 
@@ -73,8 +73,8 @@ func TestTryBeginPostgresDuplicateUsesScopedPlaceholderQuery(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO idempotency_records")).
 		WithArgs(insertArgs(record, true)...).
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(regexp.QuoteMeta("WHERE idempotency_key = $1 AND scope_service = $2 AND expires_at > NOW()")).
-		WithArgs(record.Key().String(), record.Scope().Service()).
+	mock.ExpectQuery(regexp.QuoteMeta("WHERE idempotency_key = $1 AND scope_service = $2 AND scope_tenant = $3 AND scope_user = $4 AND expires_at > NOW()")).
+		WithArgs(record.Key().String(), record.Scope().Service(), record.Scope().Tenant(), record.Scope().User()).
 		WillReturnRows(rowsFor(completed))
 	mock.ExpectCommit()
 
@@ -131,7 +131,7 @@ func TestCommitMissMapsOwnerMismatch(t *testing.T) {
 		WithArgs(commitArgs(completed)...).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(regexp.QuoteMeta("FROM idempotency_records")).
-		WithArgs(completed.Key().String(), completed.Scope().Service()).
+		WithArgs(completed.Key().String(), completed.Scope().Service(), completed.Scope().Tenant(), completed.Scope().User()).
 		WillReturnRows(rowsFor(existing))
 
 	err = repo.Commit(context.Background(), completed)
@@ -150,10 +150,10 @@ func TestQueryBuildersUseDriverPlaceholders(t *testing.T) {
 	if strings.Contains(mysqlRepo.findQuery(true), "$1") {
 		t.Fatalf("mysql find query contains postgres placeholders: %s", mysqlRepo.findQuery(true))
 	}
-	if !strings.Contains(postgresRepo.findQuery(true), "$1") || !strings.Contains(postgresRepo.updateQuery(), "$13") {
+	if !strings.Contains(postgresRepo.findQuery(true), "$4") || !strings.Contains(postgresRepo.updateQuery(), "$15") {
 		t.Fatalf("postgres queries should use numbered placeholders")
 	}
-	if !strings.Contains(postgresRepo.deleteByOwnerQuery(), "$3") {
+	if !strings.Contains(postgresRepo.deleteByOwnerQuery(), "$5") {
 		t.Fatalf("postgres delete query should use numbered placeholders: %s", postgresRepo.deleteByOwnerQuery())
 	}
 }
@@ -242,6 +242,8 @@ func commitArgs(record *model.IdempotencyRecord) []driver.Value {
 		record.ExpiresAt().Format("2006-01-02 15:04:05.000"),
 		record.Key().String(),
 		record.Scope().Service(),
+		record.Scope().Tenant(),
+		record.Scope().User(),
 		record.Owner().String(),
 		record.Fingerprint().String(),
 		model.StatusProcessing.String(),

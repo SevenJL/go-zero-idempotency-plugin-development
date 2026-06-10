@@ -1,7 +1,8 @@
 -- =============================================================================
 -- Idempotency record storage schema
 --
--- This schema enforces at-most-once semantics per (scope_service, idempotency_key)
+-- This schema enforces at-most-once semantics per
+-- (scope_service, scope_tenant, scope_user, idempotency_key)
 -- via a UNIQUE constraint. Supports both MySQL (5.7+) and PostgreSQL (12+).
 --
 -- Apply with:
@@ -32,7 +33,7 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
     updated_at      DATETIME(3)   NOT NULL,
     expires_at      DATETIME(3)   NOT NULL,
 
-    UNIQUE INDEX uq_key_scope (scope_service, idempotency_key),
+    UNIQUE INDEX uq_key_scope (scope_service, scope_tenant, scope_user, idempotency_key),
     INDEX idx_expires_at (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -59,6 +60,6 @@ CREATE TABLE IF NOT EXISTS idempotency_records (
 --     updated_at      TIMESTAMP(3)  NOT NULL,
 --     expires_at      TIMESTAMP(3)  NOT NULL,
 --
---     CONSTRAINT uq_key_scope UNIQUE (scope_service, idempotency_key)
+--     CONSTRAINT uq_key_scope UNIQUE (scope_service, scope_tenant, scope_user, idempotency_key)
 -- );
 -- CREATE INDEX IF NOT EXISTS idx_expires_at ON idempotency_records (expires_at);
