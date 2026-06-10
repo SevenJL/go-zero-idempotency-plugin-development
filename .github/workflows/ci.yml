@@ -9,7 +9,7 @@
 # Optional GitHub secrets:
 #   DEPLOY_PORT     SSH port, defaults to 22
 #   DEPLOY_PATH     Remote deploy directory, defaults to /opt/idempotency-example
-#   APP_PORT        Public HTTP port, defaults to 8080
+#   APP_PORT        Public HTTP port, defaults to 8111
 #
 # Docker image archives are kept as GitHub Actions artifacts and are also copied
 # to ${DEPLOY_PATH}/images on the remote server.
@@ -26,7 +26,7 @@ env:
   GO_VERSION: "1.25"
   IMAGE_NAME: idempotency-example
   CONTAINER_NAME: idempotency-example
-  CONTAINER_PORT: "8080"
+  CONTAINER_PORT: "8111"
 
 jobs:
   build:
@@ -101,7 +101,7 @@ jobs:
       DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/idempotency-example' }}
-      HOST_PORT: ${{ secrets.APP_PORT || '8080' }}
+      HOST_PORT: ${{ secrets.APP_PORT || '8111' }}
       IMAGE_TAG: ${{ github.sha }}
     steps:
       - name: Download image artifact
