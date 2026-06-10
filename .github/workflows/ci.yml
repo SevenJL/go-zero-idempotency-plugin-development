@@ -1,54 +1,59 @@
 # =============================================================================
-# CI Pipeline — lint, test, build, coverage
+# Build and deploy pipeline
 #
-# Triggers:
-#   - Push to main
-#   - Pull request to main
-#   - Manual dispatch (workflow_dispatch)
+# Required GitHub secrets:
+#   DEPLOY_HOST     Remote server host or IP
+#   DEPLOY_USER     SSH user on the remote server
+#   DEPLOY_SSH_KEY  Private SSH key with access to the remote server
+#
+# Optional GitHub secrets:
+#   DEPLOY_PORT     SSH port, defaults to 22
+#   DEPLOY_PATH     Remote deploy directory, defaults to /opt/idempotency-example
+#   APP_PORT        Public HTTP port, defaults to 8080
 # =============================================================================
 
-name: CI
+name: Build and Deploy
 
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
 env:
   GO_VERSION: "1.25"
+  IMAGE_NAME: idempotency-example
+  CONTAINER_NAME: idempotency-example
+  CONTAINER_PORT: "8080"
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Build — verify the example app compiles
-  # ---------------------------------------------------------------------------
   build:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Capture build metadata
+        id: metadata
+        run: echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_OUTPUT}"
+
       - name: Build example binary
-        run: go build -o /dev/null ./examples/gin/
-
-      - name: Build check all packages
-        run: go build ./...
-
-  # ---------------------------------------------------------------------------
-  # Docker — build image and verify it starts (smoke test)
-  # ---------------------------------------------------------------------------
-  docker:
-    name: Docker
-    runs-on: ubuntu-latest
-    needs: [build]
-    steps:
-      - uses: actions/checkout@v4
+        env:
+          BUILD_TIME: ${{ steps.metadata.outputs.build_time }}
+        run: |
+          mkdir -p bin
+          go build -trimpath \
+            -ldflags="-s -w -X main.Version=${GITHUB_REF_NAME} -X main.Commit=${GITHUB_SHA} -X main.BuildTime=${BUILD_TIME}" \
+            -o bin/idempotency-example \
+            ./examples/gin/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -58,25 +63,83 @@ jobs:
         with:
           context: .
           load: true
-          tags: idempotency-example:ci-test
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.metadata.outputs.build_time }}
 
-      - name: Smoke test — start container and check health
+      - name: Package Docker image
         run: |
-          docker run -d --rm -p 8080:8080 --name ci-smoke idempotency-example:ci-test
-          # Wait for startup and check health endpoint
-          for i in $(seq 1 10); do
-            if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
-              echo "Container healthy after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "Container failed to become healthy"
-          docker logs ci-smoke
-          exit 1
+          mkdir -p dist
+          docker save "${IMAGE_NAME}:${GITHUB_SHA}" | gzip > "dist/${IMAGE_NAME}-${GITHUB_SHA}.tar.gz"
 
-      - name: Cleanup
-        if: always()
-        run: docker stop ci-smoke || true
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: dist/*.tar.gz
+          retention-days: 1
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    environment: production
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/idempotency-example' }}
+      HOST_PORT: ${{ secrets.APP_PORT || '8080' }}
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: dist
+
+      - name: Validate deploy secrets
+        run: |
+          test -n "${DEPLOY_HOST}" || (echo "DEPLOY_HOST is required" && exit 1)
+          test -n "${DEPLOY_USER}" || (echo "DEPLOY_USER is required" && exit 1)
+          test -n "${DEPLOY_SSH_KEY}" || (echo "DEPLOY_SSH_KEY is required" && exit 1)
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT}" "${DEPLOY_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Upload image to server
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_PATH}'"
+          scp -i ~/.ssh/deploy_key -P "${DEPLOY_PORT}" dist/*.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/image.tar.gz"
+
+      - name: Load image and restart container
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "DEPLOY_PATH='${DEPLOY_PATH}' IMAGE_NAME='${IMAGE_NAME}' IMAGE_TAG='${IMAGE_TAG}' CONTAINER_NAME='${CONTAINER_NAME}' HOST_PORT='${HOST_PORT}' CONTAINER_PORT='${CONTAINER_PORT}' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "${DEPLOY_PATH}"
+          gzip -dc image.tar.gz | docker load
+
+          docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+          docker run -d \
+            --name "${CONTAINER_NAME}" \
+            --restart unless-stopped \
+            -p "${HOST_PORT}:${CONTAINER_PORT}" \
+            "${IMAGE_NAME}:${IMAGE_TAG}"
+
+          docker image prune -f
+          REMOTE
