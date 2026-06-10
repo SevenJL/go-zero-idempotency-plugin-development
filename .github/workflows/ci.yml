@@ -10,6 +10,9 @@
 #   DEPLOY_PORT     SSH port, defaults to 22
 #   DEPLOY_PATH     Remote deploy directory, defaults to /opt/idempotency-example
 #   APP_PORT        Public HTTP port, defaults to 8080
+#
+# Docker image archives are kept as GitHub Actions artifacts and are also copied
+# to ${DEPLOY_PATH}/images on the remote server.
 # =============================================================================
 
 name: Build and Deploy
@@ -83,7 +86,7 @@ jobs:
         with:
           name: docker-image
           path: dist/*.tar.gz
-          retention-days: 1
+          retention-days: 30
 
   deploy:
     name: Deploy
@@ -122,17 +125,18 @@ jobs:
 
       - name: Upload image to server
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_PATH}'"
-          scp -i ~/.ssh/deploy_key -P "${DEPLOY_PORT}" dist/*.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/image.tar.gz"
+          ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '${DEPLOY_PATH}/images'"
+          scp -i ~/.ssh/deploy_key -P "${DEPLOY_PORT}" dist/*.tar.gz "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/images/${IMAGE_NAME}-${IMAGE_TAG}.tar.gz"
 
       - name: Load image and restart container
         run: |
           ssh -i ~/.ssh/deploy_key -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "DEPLOY_PATH='${DEPLOY_PATH}' IMAGE_NAME='${IMAGE_NAME}' IMAGE_TAG='${IMAGE_TAG}' CONTAINER_NAME='${CONTAINER_NAME}' HOST_PORT='${HOST_PORT}' CONTAINER_PORT='${CONTAINER_PORT}' bash -s" <<'REMOTE'
+            "DEPLOY_PATH='${DEPLOY_PATH}' IMAGE_ARCHIVE='${DEPLOY_PATH}/images/${IMAGE_NAME}-${IMAGE_TAG}.tar.gz' IMAGE_NAME='${IMAGE_NAME}' IMAGE_TAG='${IMAGE_TAG}' CONTAINER_NAME='${CONTAINER_NAME}' HOST_PORT='${HOST_PORT}' CONTAINER_PORT='${CONTAINER_PORT}' bash -s" <<'REMOTE'
           set -euo pipefail
 
           cd "${DEPLOY_PATH}"
-          gzip -dc image.tar.gz | docker load
+          gzip -dc "${IMAGE_ARCHIVE}" | docker load
+          ln -sfn "${IMAGE_ARCHIVE}" "${DEPLOY_PATH}/image-latest.tar.gz"
 
           docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
           docker run -d \
@@ -141,5 +145,5 @@ jobs:
             -p "${HOST_PORT}:${CONTAINER_PORT}" \
             "${IMAGE_NAME}:${IMAGE_TAG}"
 
-          docker image prune -f
+          echo "Saved image archive: ${IMAGE_ARCHIVE}"
           REMOTE
